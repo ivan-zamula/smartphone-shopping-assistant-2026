@@ -5,11 +5,30 @@
 A project for searching a smartphone catalog and answering questions using
 retrieved records. The first interface will use Streamlit.
 
-**Current status:** a local embedding benchmark is implemented and checked on
-100 records. Full-catalog ingestion, Qdrant, the web interface and answer
-generation are not implemented yet.
+**Current status:** all 1,816 catalog records have been validated and prepared as
+text cards. A local embedding benchmark has been checked on 100 records.
+Full-catalog embeddings, Qdrant, the web interface and answer generation are not implemented yet.
 
 ## Architecture
+
+Catalog preparation validates the eight-column schema, required text, positive
+integer memory values, positive finite prices and the Yes/No carrier-lock field.
+Unknown memory values remain `null`. Original strings are preserved in `raw_fields`.
+
+Stable UUIDs are derived from a neutral catalog identifier and full product name after
+Unicode, whitespace and case normalization. Row order and price changes do not
+change IDs; model suffixes, memory variants and colors in the name are retained.
+Duplicate identities are rejected instead of silently merged.
+
+```text
+Local CSV -> validate rows -> cards with stable UUIDs -> catalog.json
+```
+
+The output is one ordinary JSON document: an array of cards. Preparation validates
+all rows before replacing `var/prepared/catalog.json`. A repeated run replaces
+that file; invalid input leaves the previous result unchanged. No snapshots,
+manifests or version switches are created. This step computes no embeddings
+and makes no database requests.
 
 The benchmark runs as one Python process on CPU. It selects four records for
 known query targets and adds other CSV records to make a 100-record sample.
@@ -39,7 +58,7 @@ files remain in the Hugging Face cache for subsequent runs.
 The planned application flow is:
 
 ```text
-CSV -> validated cards -> local embeddings -> Qdrant
+Prepared catalog -> local embeddings -> Qdrant
 Streamlit -> query embeddings + explicit filters -> Qdrant -> LLM -> answer with sources
 ```
 
@@ -53,6 +72,10 @@ an agent, historical sales and aggregate statistics are outside its scope.
 version 1, by Juan Merino. The dataset page identifies PC Componentes as its source
 and lists the Apache 2.0 license. Its last update is April 18, 2024.
 
+This dataset was used as the initial catalog for the project and the embedding
+benchmark. The CSV is not included in this repository. Download it from the
+dataset page linked above and save it locally as `var/raw/smartphones.csv`.
+
 The CSV contains 1,816 records and eight columns: `Smartphone`, `Brand`, `Model`,
 `RAM`, `Storage`, `Color`, `Free` and `Final Price`.
 
@@ -63,7 +86,7 @@ The CSV contains 1,816 records and eight columns: `Smartphone`, `Brand`, `Model`
 - USD is a project setting. The source currency is unconfirmed; original amounts
   are preserved without conversion and must not be presented as verified USD prices.
 
-The benchmark saves the original CSV to `var/raw/smartphones.csv` and represents
+The benchmark reads the original CSV from `var/raw/smartphones.csv` and represents
 missing memory values as unknown. Prices describe the source dataset, not current offers.
 
 ## Stack
@@ -85,22 +108,41 @@ The benchmark was checked on Linux with Python 3.12. Install
 
 ```bash
 uv sync --locked --dev
+```
+
+Download the CSV from the dataset page to `var/raw/smartphones.csv`, then prepare it:
+
+```bash
+uv run --locked python -m rag_phones.prepare
+```
+
+The result is `var/prepared/catalog.json`. Each card contains `id`, `text`,
+typed characteristics, `price` and unmodified `raw_fields`.
+`currency_status=user_selected`, `source_currency=null` and
+`conversion_applied=false` distinguish the project setting from the source currency.
+Use `--input /path/to/file.csv --output /path/to/catalog.json` for other local paths.
+
+Run the separate embedding benchmark:
+
+```bash
 uv run --locked python scripts/benchmark_embeddings.py
 ```
 
-The first run downloads the CSV and approximately 0.5 GB of model and tokenizer
-files. No Kaggle account was required for the checked public dataset download.
+The benchmark reads the existing local CSV without downloading or modifying it.
+The first model setup downloads approximately 0.5 GB of model and tokenizer files.
 The model revision and CSV checksum are pinned in the script.
 
 The script uses two CPU threads, a batch size of 16 and normalized embeddings.
 Documents receive `passage:` and questions receive `query:`, following the
 [model instructions](https://huggingface.co/intfloat/multilingual-e5-small).
-Network access is required for Kaggle and for uncached model files; embedding
-computation is local. The script does not start Qdrant or generate LLM answers.
+Network access is required only for uncached model files or model-hub metadata;
+CSV reading and embedding computation are local. Set `HF_HUB_OFFLINE=1` to use
+the cached model without network access. The script does not start Qdrant or generate LLM answers.
 
 ## Benchmark results
 
-Measured locally on November 26, 2026, Moscow time:
+Initial local measurement on November 26, 2026, Moscow time
+(saved locally as `var/benchmarks/embedding-sample-initial.json`):
 
 | Measurement | Result |
 | --- | --- |
@@ -124,19 +166,23 @@ revision, source checksum, timings and top-five results.
 
 | Path | Purpose |
 | --- | --- |
-| [scripts/benchmark_embeddings.py](scripts/benchmark_embeddings.py) | Download and sample benchmark |
-| [src/rag_phones/](src/rag_phones/) | Package scaffold for subsequent implementation |
+| [scripts/benchmark_embeddings.py](scripts/benchmark_embeddings.py) | Local CSV reading and sample benchmark |
+| [src/rag_phones/prepare.py](src/rag_phones/prepare.py) | CSV validation, stable IDs and JSON preparation |
+| [tests/test_prepare.py](tests/test_prepare.py) | Validation, identity stability and repeatability tests |
 | [pyproject.toml](pyproject.toml) | Dependencies and code-check configuration |
 | [uv.lock](uv.lock) | Locked dependency versions |
 | `var/raw/` | Downloaded source CSV; excluded from Git |
 | `var/benchmarks/` | Local reports; excluded from Git |
+| `var/prepared/` | Prepared catalog.json; excluded from Git |
 
 ```bash
-uv run --locked ruff check scripts src
-uv run --locked ruff format --check scripts src
+uv run --locked ruff check scripts src tests
+uv run --locked ruff format --check scripts src tests
 uv lock --check
+uv run --locked pytest -q
 ```
 
 The benchmark checks vector dimensions, finite values and unit norms.
-There is no automated test suite yet. Source data, model weights, local reports
-and the Python environment are excluded from Git.
+Preparation tests cover missing values, invalid numbers, duplicate identities,
+stable IDs, repeated runs and preservation of the output file on validation failure.
+Source data, model weights, local reports and the Python environment are excluded from Git.

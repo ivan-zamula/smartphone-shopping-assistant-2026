@@ -1,4 +1,4 @@
-"""Download a pinned local model and time a 100-card sample (no Qdrant writes)."""
+"""Time local embeddings on a local 100-card CSV sample (no Qdrant writes)."""
 
 import csv
 import hashlib
@@ -10,16 +10,13 @@ import resource
 import statistics
 import sys
 import time
-import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.request import urlopen
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 MODEL = "intfloat/multilingual-e5-small"
 REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
-DATASET = "juanmerinobermejo/smartphones-price-dataset"
 CSV_SHA256 = "e0077c3d7bbe46304870a87c9a14796f339a0425e1d4088efcbb683511fc3de1"
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,19 +35,11 @@ def main():
     imports_seconds = time.perf_counter() - started
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
-    log("Loading dataset version 1; original values are preserved.")
-    url = f"https://www.kaggle.com/api/v1/datasets/download/{DATASET}?datasetVersionNumber=1"
-    with urlopen(url, timeout=60) as response:
-        archive_bytes = response.read(5_000_001)
-    if len(archive_bytes) > 5_000_000:
-        raise ValueError("Unexpected dataset archive size")
-    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-        raw = archive.read("smartphones.csv")
+    log("Reading local var/raw/smartphones.csv; original values are preserved.")
+    raw_path = ROOT / "var/raw/smartphones.csv"
+    raw = raw_path.read_bytes()
     if hashlib.sha256(raw).hexdigest() != CSV_SHA256:
         raise ValueError("Dataset differs from the inspected version")
-    raw_path = ROOT / "var/raw/smartphones.csv"
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_bytes(raw)
     rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
 
     # Anchor queries have known matches; add distractors from the CSV to total 100.
@@ -76,7 +65,7 @@ def main():
             "валюта источника не подтверждена, пересчёт не выполнялся."
         )
 
-    log(f"Downloading {MODEL}@{REVISION}; CPU only, 2 threads.")
+    log(f"Resolving model cache: {MODEL}@{REVISION}; CPU only, 2 threads.")
     before_download = time.perf_counter()
     model_path = snapshot_download(
         MODEL,
@@ -160,8 +149,7 @@ def main():
         "model_files_bytes": sum(
             p.stat().st_size for p in Path(model_path).rglob("*") if p.is_file()
         ),
-        "dataset": DATASET,
-        "dataset_version": 1,
+        "input_file": raw_path.name,
         "source_sha256": CSV_SHA256,
         "dataset_rows": len(rows),
         "sample_rows": len(sample),
