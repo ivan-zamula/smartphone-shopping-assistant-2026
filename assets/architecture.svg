@@ -1,0 +1,208 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1567.0" height="694.0" viewBox="0 0 1567.0 694.0">
+<rect x="0" y="0" width="1567.0" height="91.38" fill="#f8fafc" /><text x="16" y="30" font-family="DejaVu Sans" font-size="12" fill="#475569">1. User</text><rect x="0" y="91.38" width="1567.0" height="93.125" fill="#ffffff" /><line x1="0" x2="1567.0" y1="91.38" y2="91.38" stroke="#cbd5e1" stroke-dasharray="5 5" /><text x="16" y="121.38" font-family="DejaVu Sans" font-size="12" fill="#475569">2. Interface</text><rect x="0" y="184.505" width="1567.0" height="322.84" fill="#f8fafc" /><line x1="0" x2="1567.0" y1="184.505" y2="184.505" stroke="#cbd5e1" stroke-dasharray="5 5" /><text x="16" y="214.505" font-family="DejaVu Sans" font-size="12" fill="#475569">3. Services</text><rect x="0" y="507.34499999999997" width="1567.0" height="186.65500000000003" fill="#ffffff" /><line x1="0" x2="1567.0" y1="507.34499999999997" y2="507.34499999999997" stroke="#cbd5e1" stroke-dasharray="5 5" /><text x="16" y="537.345" font-family="DejaVu Sans" font-size="12" fill="#475569">4. Storage and infrastructure</text><g transform="translate(250 0)"><g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(21.6 672.14)">
+<title>Architecture</title>
+<g id="clust1" class="cluster">
+<title>cluster_assistant</title>
+<path fill="#dbeafe" stroke="#3b82f6" d="M309.34,-259.68C309.34,-259.68 441.34,-259.68 441.34,-259.68 447.34,-259.68 453.34,-265.68 453.34,-271.68 453.34,-271.68 453.34,-457.54 453.34,-457.54 453.34,-463.54 447.34,-469.54 441.34,-469.54 441.34,-469.54 309.34,-469.54 309.34,-469.54 303.34,-469.54 297.34,-463.54 297.34,-457.54 297.34,-457.54 297.34,-271.68 297.34,-271.68 297.34,-265.68 303.34,-259.68 309.34,-259.68" />
+<text xml:space="preserve" text-anchor="middle" x="375.34" y="-452.24" font-family="DejaVu Sans" font-size="14.00">Assistant service</text>
+</g>
+
+<g id="node1" class="node">
+<title>user</title>
+<path fill="#eff6ff" stroke="#64748b" d="M780.42,-650.54C780.42,-650.54 704.25,-650.54 704.25,-650.54 698.25,-650.54 692.25,-644.54 692.25,-638.54 692.25,-638.54 692.25,-626.54 692.25,-626.54 692.25,-620.54 698.25,-614.54 704.25,-614.54 704.25,-614.54 780.42,-614.54 780.42,-614.54 786.42,-614.54 792.42,-620.54 792.42,-626.54 792.42,-626.54 792.42,-638.54 792.42,-638.54 792.42,-644.54 786.42,-650.54 780.42,-650.54" />
+<text xml:space="preserve" text-anchor="middle" x="742.34" y="-628.26" font-family="DejaVu Sans" font-size="12.00">Customer</text>
+</g>
+
+<g id="node2" class="node">
+<title>site</title>
+<path fill="#eff6ff" stroke="#64748b" d="M769.55,-547.54C769.55,-547.54 715.12,-547.54 715.12,-547.54 709.12,-547.54 703.12,-541.54 703.12,-535.54 703.12,-535.54 703.12,-523.54 703.12,-523.54 703.12,-517.54 709.12,-511.54 715.12,-511.54 715.12,-511.54 769.55,-511.54 769.55,-511.54 775.55,-511.54 781.55,-517.54 781.55,-523.54 781.55,-523.54 781.55,-535.54 781.55,-535.54 781.55,-541.54 775.55,-547.54 769.55,-547.54" />
+<text xml:space="preserve" text-anchor="middle" x="742.34" y="-525.26" font-family="DejaVu Sans" font-size="12.00">UI · Website</text>
+</g>
+
+<g id="edge9" class="edge">
+<title>user-&gt;site</title>
+<path fill="none" stroke="black" d="M742.34,-606.48 L742.34,-555.43" />
+<polygon fill="#000000" stroke="#000000" points="740.06,-606.39 742.34,-612.89 744.61,-606.39 740.06,-606.39" />
+<polygon fill="#000000" stroke="#000000" points="744.61,-555.77 742.34,-549.27 740.06,-555.77 744.61,-555.77" />
+</g>
+
+<g id="node3" class="node">
+<title>agents</title>
+<path fill="white" stroke="#64748b" d="M394.17,-424.29C394.17,-424.29 346.5,-424.29 346.5,-424.29 340.5,-424.29 334.5,-418.29 334.5,-412.29 334.5,-412.29 334.5,-400.29 334.5,-400.29 334.5,-394.29 340.5,-388.29 346.5,-388.29 346.5,-388.29 394.17,-388.29 394.17,-388.29 400.17,-388.29 406.17,-394.29 406.17,-400.29 406.17,-400.29 406.17,-412.29 406.17,-412.29 406.17,-418.29 400.17,-424.29 394.17,-424.29" />
+<text xml:space="preserve" text-anchor="middle" x="370.34" y="-402.01" font-family="DejaVu Sans" font-size="12.00">Agents</text>
+</g>
+
+<g id="edge10" class="edge">
+<title>site-&gt;agents</title>
+<path fill="none" stroke="black" d="M695.39,-513.24 L414.07,-421.54" />
+<polygon fill="#000000" stroke="#000000" points="694.55,-515.36 701.44,-515.21 695.96,-511.03 694.55,-515.36" />
+<polygon fill="#000000" stroke="#000000" points="414.96,-419.44 408.08,-419.59 413.55,-423.77 414.96,-419.44" />
+</g>
+
+<g id="node5" class="node">
+<title>catalog</title>
+<path fill="#eff6ff" stroke="#64748b" d="M597.17,-424.29C597.17,-424.29 489.5,-424.29 489.5,-424.29 483.5,-424.29 477.5,-418.29 477.5,-412.29 477.5,-412.29 477.5,-400.29 477.5,-400.29 477.5,-394.29 483.5,-388.29 489.5,-388.29 489.5,-388.29 597.17,-388.29 597.17,-388.29 603.17,-388.29 609.17,-394.29 609.17,-400.29 609.17,-400.29 609.17,-412.29 609.17,-412.29 609.17,-418.29 603.17,-424.29 597.17,-424.29" />
+<text xml:space="preserve" text-anchor="middle" x="543.34" y="-402.01" font-family="DejaVu Sans" font-size="12.00">Catalog service</text>
+</g>
+
+<g id="edge11" class="edge">
+<title>site-&gt;catalog</title>
+<path fill="none" stroke="black" d="M707.37,-507.23 L578.33,-428.61" />
+<polygon fill="#000000" stroke="#000000" points="705.8,-508.94 712.53,-510.38 708.16,-505.05 705.8,-508.94" />
+<polygon fill="#000000" stroke="#000000" points="579.82,-426.85 573.09,-425.41 577.45,-430.74 579.82,-426.85" />
+</g>
+
+<g id="node6" class="node">
+<title>orders</title>
+<path fill="#eff6ff" stroke="#64748b" d="M792.42,-424.29C792.42,-424.29 692.25,-424.29 692.25,-424.29 686.25,-424.29 680.25,-418.29 680.25,-412.29 680.25,-412.29 680.25,-400.29 680.25,-400.29 680.25,-394.29 686.25,-388.29 692.25,-388.29 692.25,-388.29 792.42,-388.29 792.42,-388.29 798.42,-388.29 804.42,-394.29 804.42,-400.29 804.42,-400.29 804.42,-412.29 804.42,-412.29 804.42,-418.29 798.42,-424.29 792.42,-424.29" />
+<text xml:space="preserve" text-anchor="middle" x="742.34" y="-402.01" font-family="DejaVu Sans" font-size="12.00">Order service</text>
+</g>
+
+<g id="edge12" class="edge">
+<title>site-&gt;orders</title>
+<path fill="none" stroke="black" d="M742.34,-503.33 L742.34,-432.41" />
+<polygon fill="#000000" stroke="#000000" points="740.06,-503.15 742.34,-509.65 744.61,-503.15 740.06,-503.15" />
+<polygon fill="#000000" stroke="#000000" points="744.61,-432.64 742.34,-426.14 740.06,-432.64 744.61,-432.64" />
+</g>
+
+<g id="node7" class="node">
+<title>account</title>
+<path fill="#eff6ff" stroke="#64748b" d="M1050.92,-429.9C1050.92,-429.9 887.75,-429.9 887.75,-429.9 881.75,-429.9 875.75,-423.9 875.75,-417.9 875.75,-417.9 875.75,-394.68 875.75,-394.68 875.75,-388.68 881.75,-382.68 887.75,-382.68 887.75,-382.68 1050.92,-382.68 1050.92,-382.68 1056.92,-382.68 1062.92,-388.68 1062.92,-394.68 1062.92,-394.68 1062.92,-417.9 1062.92,-417.9 1062.92,-423.9 1056.92,-429.9 1050.92,-429.9" />
+<text xml:space="preserve" text-anchor="middle" x="969.34" y="-409.14" font-family="DejaVu Sans" font-size="12.00">Account service</text>
+<text xml:space="preserve" text-anchor="middle" x="969.34" y="-394.89" font-family="DejaVu Sans" font-size="12.00">Favorites</text>
+</g>
+
+<g id="edge13" class="edge">
+<title>site-&gt;account</title>
+<path fill="none" stroke="black" d="M781.89,-507.41 L919.4,-433.96" />
+<polygon fill="#000000" stroke="#000000" points="780.86,-505.38 776.19,-510.45 783,-509.4 780.86,-505.38" />
+<polygon fill="#000000" stroke="#000000" points="920.41,-436 925.07,-430.93 918.26,-431.99 920.41,-436" />
+</g>
+
+<g id="node8" class="node">
+<title>other</title>
+<path fill="#eff6ff" stroke="#64748b" d="M1262.3,-424.29C1262.3,-424.29 1146.38,-424.29 1146.38,-424.29 1140.38,-424.29 1134.38,-418.29 1134.38,-412.29 1134.38,-412.29 1134.38,-400.29 1134.38,-400.29 1134.38,-394.29 1140.38,-388.29 1146.38,-388.29 1146.38,-388.29 1262.3,-388.29 1262.3,-388.29 1268.3,-388.29 1274.3,-394.29 1274.3,-400.29 1274.3,-400.29 1274.3,-412.29 1274.3,-412.29 1274.3,-418.29 1268.3,-424.29 1262.3,-424.29" />
+<text xml:space="preserve" text-anchor="middle" x="1204.34" y="-402.01" font-family="DejaVu Sans" font-size="12.00">Other services…</text>
+</g>
+
+<g id="edge14" class="edge">
+<title>site-&gt;other</title>
+<path fill="none" stroke="black" d="M789.44,-516.18 L1130.28,-426.72" />
+<polygon fill="#000000" stroke="#000000" points="788.9,-513.97 783.19,-517.82 790.05,-518.37 788.9,-513.97" />
+<polygon fill="#000000" stroke="#000000" points="1130.75,-428.95 1136.45,-425.1 1129.59,-424.55 1130.75,-428.95" />
+</g>
+
+<g id="node4" class="node">
+<title>search</title>
+<path fill="white" stroke="#64748b" d="M413.42,-315.68C413.42,-315.68 337.25,-315.68 337.25,-315.68 331.25,-315.68 325.25,-309.68 325.25,-303.68 325.25,-303.68 325.25,-291.68 325.25,-291.68 325.25,-285.68 331.25,-279.68 337.25,-279.68 337.25,-279.68 413.42,-279.68 413.42,-279.68 419.42,-279.68 425.42,-285.68 425.42,-291.68 425.42,-291.68 425.42,-303.68 425.42,-303.68 425.42,-309.68 419.42,-315.68 413.42,-315.68" />
+<text xml:space="preserve" text-anchor="middle" x="375.34" y="-293.4" font-family="DejaVu Sans" font-size="12.00">Search · RAG</text>
+</g>
+
+<g id="edge1" class="edge">
+<title>agents-&gt;search</title>
+<path fill="none" stroke="black" d="M371.51,-380.2 L374.15,-323.99" />
+<polygon fill="#000000" stroke="#000000" points="369.24,-380.05 371.21,-386.65 373.79,-380.26 369.24,-380.05" />
+<polygon fill="#000000" stroke="#000000" points="376.41,-324.23 374.45,-317.63 371.87,-324.02 376.41,-324.23" />
+</g>
+
+
+<g id="edge15" class="edge">
+<title>agents-&gt;orders</title>
+<path fill="none" stroke="#2563eb" d="M350,-432.29 L350,-484 L742.34,-484 L742.34,-432.29" stroke-dasharray="5,2" />
+<polygon fill="#2563eb" stroke="#2563eb" points="350,-424.29 347.2,-432.29 352.8,-432.29" />
+<polygon fill="#2563eb" stroke="#2563eb" points="742.34,-424.29 739.5400000000001,-432.29 745.14,-432.29" />
+</g>
+
+<g id="edge16" class="edge">
+<title>agents-&gt;account</title>
+<path fill="none" stroke="#2563eb" d="M390,-432.29 L390,-507 L969.34,-507 L969.34,-437.9" stroke-dasharray="5,2" />
+<polygon fill="#2563eb" stroke="#2563eb" points="390,-424.29 387.2,-432.29 392.8,-432.29" />
+<polygon fill="#2563eb" stroke="#2563eb" points="969.34,-429.9 966.5400000000001,-437.9 972.14,-437.9" />
+</g>
+
+<g id="node9" class="node">
+<title>llm</title>
+<path fill="#f1f5f9" stroke="#64748b" d="M98.67,-50.46C98.67,-50.46 12,-50.46 12,-50.46 6,-50.46 0,-44.46 0,-38.46 0,-38.46 0,-26.46 0,-26.46 0,-20.46 6,-14.46 12,-14.46 12,-14.46 98.67,-14.46 98.67,-14.46 104.67,-14.46 110.67,-20.46 110.67,-26.46 110.67,-26.46 110.67,-38.46 110.67,-38.46 110.67,-44.46 104.67,-50.46 98.67,-50.46" />
+<text xml:space="preserve" text-anchor="middle" x="55.34" y="-28.19" font-family="DejaVu Sans" font-size="12.00">External LLM</text>
+</g>
+
+<g id="edge17" class="edge">
+<title>agents-&gt;llm</title>
+<path fill="none" stroke="black" d="M349.92,-382.05 L75.57,-56.47" />
+<polygon fill="#000000" stroke="#000000" points="348.03,-383.34 353.95,-386.85 351.5,-380.41 348.03,-383.34" />
+<polygon fill="#000000" stroke="#000000" points="77.62,-55.37 71.69,-51.87 74.14,-58.31 77.62,-55.37" />
+</g>
+
+<g id="node10" class="node">
+<title>llm_internal</title>
+<path fill="#f1f5f9" stroke="#64748b" d="M298.3,-50.46C298.3,-50.46 194.38,-50.46 194.38,-50.46 188.38,-50.46 182.38,-44.46 182.38,-38.46 182.38,-38.46 182.38,-26.46 182.38,-26.46 182.38,-20.46 188.38,-14.46 194.38,-14.46 194.38,-14.46 298.3,-14.46 298.3,-14.46 304.3,-14.46 310.3,-20.46 310.3,-26.46 310.3,-26.46 310.3,-38.46 310.3,-38.46 310.3,-44.46 304.3,-50.46 298.3,-50.46" />
+<text xml:space="preserve" text-anchor="middle" x="246.34" y="-28.19" font-family="DejaVu Sans" font-size="12.00">Internal LLM</text>
+</g>
+
+<g id="edge18" class="edge">
+<title>agents-&gt;llm_internal</title>
+<path fill="none" stroke="black" d="M361.87,-380.78 L254.83,-58.08" />
+<polygon fill="#000000" stroke="#000000" points="359.59,-381.11 363.79,-386.57 363.91,-379.68 359.59,-381.11" />
+<polygon fill="#000000" stroke="#000000" points="257.07,-57.6 252.86,-52.15 252.75,-59.03 257.07,-57.6" />
+</g>
+
+<g id="edge19" class="edge">
+<title>search-&gt;llm</title>
+<path fill="none" stroke="black" d="M346.92,-274.13 L83.37,-55.7" />
+<polygon fill="#000000" stroke="#000000" points="345.47,-275.88 351.92,-278.27 348.37,-272.37 345.47,-275.88" />
+<polygon fill="#000000" stroke="#000000" points="85.06,-54.14 78.6,-51.75 82.15,-57.65 85.06,-54.14" />
+</g>
+
+<g id="edge20" class="edge">
+<title>search-&gt;llm_internal</title>
+<path fill="none" stroke="black" d="M363.05,-272.43 L258.67,-57.83" />
+<polygon fill="#000000" stroke="#000000" points="360.92,-273.24 365.81,-278.09 365.01,-271.25 360.92,-273.24" />
+<polygon fill="#000000" stroke="#000000" points="260.81,-57.03 255.93,-52.18 256.72,-59.02 260.81,-57.03" />
+</g>
+
+<g id="node11" class="node">
+<title>vectors</title>
+<path fill="#f1f5f9" stroke="#64748b" d="M516.67,-59.02C516.67,-62.28 486.49,-64.93 449.34,-64.93 412.18,-64.93 382,-62.28 382,-59.02 382,-59.02 382,-5.9 382,-5.9 382,-2.65 412.18,0 449.34,0 486.49,0 516.67,-2.65 516.67,-5.9 516.67,-5.9 516.67,-59.02 516.67,-59.02" />
+<path fill="none" stroke="#64748b" d="M516.67,-59.02C516.67,-55.77 486.49,-53.12 449.34,-53.12 412.18,-53.12 382,-55.77 382,-59.02" />
+<text xml:space="preserve" text-anchor="middle" x="449.34" y="-35.31" font-family="DejaVu Sans" font-size="12.00">Qdrant</text>
+<text xml:space="preserve" text-anchor="middle" x="449.34" y="-21.06" font-family="DejaVu Sans" font-size="12.00">Product vectors</text>
+</g>
+
+<g id="edge21" class="edge">
+<title>search-&gt;vectors</title>
+<path fill="none" stroke="black" d="M382.53,-271.89 L438.09,-72.77" />
+<polygon fill="#000000" stroke="#000000" points="380.38,-271.12 380.83,-277.99 384.77,-272.34 380.38,-271.12" />
+<polygon fill="#000000" stroke="#000000" points="440.22,-73.6 439.77,-66.73 435.84,-72.38 440.22,-73.6" />
+</g>
+
+<g id="node12" class="node">
+<title>sql</title>
+<path fill="#f1f5f9" stroke="#64748b" d="M810.55,-59.02C810.55,-62.28 760.7,-64.93 699.34,-64.93 637.97,-64.93 588.12,-62.28 588.12,-59.02 588.12,-59.02 588.12,-5.9 588.12,-5.9 588.12,-2.65 637.97,0 699.34,0 760.7,0 810.55,-2.65 810.55,-5.9 810.55,-5.9 810.55,-59.02 810.55,-59.02" />
+<path fill="none" stroke="#64748b" d="M810.55,-59.02C810.55,-55.77 760.7,-53.12 699.34,-53.12 637.97,-53.12 588.12,-55.77 588.12,-59.02" />
+<text xml:space="preserve" text-anchor="middle" x="699.34" y="-35.31" font-family="DejaVu Sans" font-size="12.00">Relational database</text>
+<text xml:space="preserve" text-anchor="middle" x="699.34" y="-21.06" font-family="DejaVu Sans" font-size="12.00">Products, prices, specifications</text>
+</g>
+
+<g id="edge22" class="edge">
+<title>search-&gt;sql</title>
+<path fill="none" stroke="black" d="M406.49,-274.65 L656.99,-70.45" />
+<polygon fill="#000000" stroke="#000000" points="405.23,-272.75 401.36,-278.44 407.93,-276.41 405.23,-272.75" />
+<polygon fill="#000000" stroke="#000000" points="658.31,-72.32 661.63,-66.29 655.27,-68.93 658.31,-72.32" />
+<text xml:space="preserve" text-anchor="middle" x="585.84" y="-169.18" font-family="DejaVu Sans" font-size="10.00">Reads and filters</text>
+</g>
+
+
+<g id="edge23" class="edge">
+<title>catalog-&gt;sql</title>
+<path fill="none" stroke="black" d="M553.93,-380.89 L682.62,-72.53" />
+<polygon fill="#000000" stroke="#000000" points="551.95,-379.73 551.55,-386.61 556.15,-381.48 551.95,-379.73" />
+<polygon fill="#000000" stroke="#000000" points="684.63,-73.62 685.03,-66.74 680.43,-71.86 684.63,-73.62" />
+</g>
+
+
+
+
+
+</g>
+</g></svg>

@@ -36,6 +36,7 @@ def make_card(raw: dict[str, str]) -> dict:
     name = " ".join(raw["Smartphone"].split())
     identity = unicodedata.normalize("NFC", name).casefold()
     unlocked = raw["Free"].strip() == "Yes"
+    # Keep the original UUID namespace so project renames do not change catalog IDs.
     return {
         "id": str(uuid5(NAMESPACE_URL, f"rag-phones:smartphones#{identity}")),
         "name": name,

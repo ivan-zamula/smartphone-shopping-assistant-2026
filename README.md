@@ -1,15 +1,28 @@
-# Smartphone Catalog RAG
+# Smartphone Shopping Assistant
 
 [English](README.md) | [Русский](README.ru.md)
 
-A project for searching a smartphone catalog and answering questions using
-retrieved records. The first interface will use Streamlit.
+A planned chatbot for a smartphone store, helping customers search the catalog
+and choose phones using retrieved records. The first interface will use Streamlit.
 
 **Current status:** all 1,816 catalog records have been validated and prepared as
 text cards. A local embedding benchmark has been checked on 100 records.
 Full-catalog embeddings, Qdrant, the web interface and answer generation are not implemented yet.
 
 ## Architecture
+
+The diagram shows the target service architecture. The website calls the assistant,
+catalog, order, account and other services through their APIs. The assistant contains
+agents and RAG search, with access to Qdrant, a relational database and internal
+or external LLMs. Blue dashed arrows show agent calls to the order and account APIs.
+
+![Target service architecture](assets/architecture.svg)
+
+The service layer and infrastructure integrations are planned. The current
+implementation covers catalog preparation and a local embedding benchmark;
+the first version focuses on RAG search, with agents deferred.
+
+### Current implementation
 
 Catalog preparation validates the eight-column schema, required text, positive
 integer memory values, positive finite prices and the Yes/No carrier-lock field.
@@ -62,7 +75,8 @@ Prepared catalog -> local embeddings -> Qdrant
 Streamlit -> query embeddings + explicit filters -> Qdrant -> LLM -> answer with sources
 ```
 
-The Qdrant deployment mode and answer-generation model still need to be selected.
+Docker Compose configuration for Qdrant is prepared; a running database has not
+been verified. The answer-generation model still needs to be selected.
 Numeric constraints will use metadata filters. This version covers one catalog;
 an agent, historical sales and aggregate statistics are outside its scope.
 
@@ -113,7 +127,7 @@ uv sync --locked --dev
 Download the CSV from the dataset page to `var/raw/smartphones.csv`, then prepare it:
 
 ```bash
-uv run --locked python -m rag_phones.prepare
+uv run --locked python -m smartphone_shopping_assistant.prepare
 ```
 
 The result is `var/prepared/catalog.json`. Each card contains `id`, `text`,
@@ -167,7 +181,7 @@ revision, source checksum, timings and top-five results.
 | Path | Purpose |
 | --- | --- |
 | [scripts/benchmark_embeddings.py](scripts/benchmark_embeddings.py) | Local CSV reading and sample benchmark |
-| [src/rag_phones/prepare.py](src/rag_phones/prepare.py) | CSV validation, stable IDs and JSON preparation |
+| [src/smartphone_shopping_assistant/prepare.py](src/smartphone_shopping_assistant/prepare.py) | CSV validation, stable IDs and JSON preparation |
 | [tests/test_prepare.py](tests/test_prepare.py) | Validation, identity stability and repeatability tests |
 | [pyproject.toml](pyproject.toml) | Dependencies and code-check configuration |
 | [uv.lock](uv.lock) | Locked dependency versions |

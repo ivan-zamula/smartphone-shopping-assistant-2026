@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from rag_phones.prepare import COLUMNS, prepare_catalog, read_catalog
+from smartphone_shopping_assistant.prepare import COLUMNS, prepare_catalog, read_catalog
 
 
 def row(name="Example Phone 8/256GB", **updates):

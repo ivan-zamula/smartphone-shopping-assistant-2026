@@ -612,7 +612,7 @@ wheels = [
 ]
 
 [[package]]
-name = "rag-phones"
+name = "smartphone-shopping-assistant"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
