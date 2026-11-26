@@ -5,10 +5,10 @@
 A planned chatbot for a smartphone store, helping customers search the catalog
 and choose phones using retrieved records. The first interface will use Streamlit.
 
-**Current status:** all 1,816 catalog records have been validated and prepared as
-text cards. A local embedding benchmark has been checked on 100 records.
-PostgreSQL and Qdrant run locally; SQL/API access and data persistence have been checked.
-Full-catalog embeddings, the web interface and answer generation are not implemented yet.
+**Current status:** all 1,816 catalog records are loaded into PostgreSQL and Qdrant
+with matching UUIDs and normalized embeddings. Stored values, vectors and technical
+vector search have been checked locally. The web interface, user-facing retrieval
+and answer generation are not implemented yet.
 
 ## Architecture
 
@@ -20,7 +20,7 @@ or external LLMs. Blue dashed arrows show agent calls to the order and account A
 ![Target service architecture](assets/architecture.svg)
 
 The service layer and application integrations are planned. PostgreSQL and Qdrant run locally;
-the current implementation covers catalog preparation and a local embedding benchmark;
+the implementation covers catalog preparation, full-catalog ingestion and a local embedding benchmark;
 the first version focuses on RAG search, with agents deferred.
 
 ### Current implementation
@@ -63,22 +63,22 @@ flowchart TD
     RANK --> REPORT["JSON report · timings and results"]
 ```
 
-For normalized vectors, the dot product gives cosine similarity. Vectors currently
-exist only in process memory; they are not saved to a vector database. Model
-files remain in the Hugging Face cache for subsequent runs.
+For normalized vectors, the dot product gives cosine similarity. The benchmark
+keeps its sample vectors in process memory; the separate ingestion command below
+stores full-catalog vectors in Qdrant. Model files remain in the Hugging Face cache.
 
 ### Next stage
 
 The planned application flow is:
 
 ```text
-Prepared catalog -> local embeddings -> Qdrant
-Streamlit -> query embeddings + explicit filters -> Qdrant -> LLM -> answer with sources
+Streamlit -> PostgreSQL filters -> candidate UUIDs
+Query embedding + candidate UUIDs -> Qdrant -> PostgreSQL product cards -> LLM -> answer
 ```
 
-Qdrant is running locally with verified API access and data persistence.
-Full-catalog indexing is still pending. The answer-generation model still needs to be selected.
-Numeric constraints will use metadata filters. This version covers one catalog;
+The full catalog is loaded into both databases. User-facing filtered retrieval
+is the next stage; numeric constraints will use PostgreSQL. The answer-generation
+model still needs to be selected. This version covers one catalog;
 an agent, historical sales and aggregate statistics are outside its scope.
 
 ## Data
@@ -109,7 +109,7 @@ missing memory values as unknown. Prices describe the source dataset, not curren
 | Component | Technology | Status |
 | --- | --- | --- |
 | Runtime and environment | Python 3.12, uv | Used in the benchmark |
-| Embeddings | Sentence Transformers, PyTorch CPU, multilingual-e5-small | Installed and checked |
+| Embeddings | Sentence Transformers, PyTorch CPU, multilingual-e5-small | Full catalog encoded locally |
 | Sample ranking | NumPy | Used in the benchmark |
 | Code checks | Ruff | Configured and checked |
 | Relational database | PostgreSQL 18.7 | Running locally; SQL access and persistence verified |
@@ -152,8 +152,8 @@ See the [official image documentation](https://github.com/docker-library/docs/bl
 
 Local verification passed: the container is healthy, SQL access works over TCP
 with password authentication, and a probe record survived container recreation.
-The probe schema was removed afterward. Product tables, catalog loading and
-application database connections are not implemented yet.
+The infrastructure probe schema was removed afterward. Catalog ingestion creates
+`public.products`; user-facing application database access is still planned.
 
 ### Local Qdrant
 
@@ -170,7 +170,7 @@ Data is stored in `var/qdrant/storage/`, mounted at `/qdrant/storage` and exclud
 from Git. Local verification covered `/healthz`, `/readyz`, writing and reading
 three synthetic 3-dimensional vectors with payloads, and nearest-neighbor search.
 The records and search results survived container recreation. The test collection
-was deleted afterward; the smartphone catalog has not been indexed yet.
+was deleted afterward; the full catalog is stored separately in `smartphones`.
 
 ### Catalog preparation and embedding benchmark
 
@@ -185,6 +185,51 @@ typed characteristics, `price` and unmodified `raw_fields`.
 `currency_status=user_selected`, `source_currency=null` and
 `conversion_applied=false` distinguish the project setting from the source currency.
 Use `--input /path/to/file.csv --output /path/to/catalog.json` for other local paths.
+
+### Load the catalog into PostgreSQL and Qdrant
+
+Start both databases as described above. Prepare `var/prepared/catalog.json`
+and cache the pinned model using the embedding benchmark below, then run:
+
+```bash
+uv run --locked python -m smartphone_shopping_assistant.ingest
+```
+
+The command reads `.env`; environment variables override the file. In addition
+to the PostgreSQL settings above, `POSTGRES_HOST` defaults to `127.0.0.1` and
+`QDRANT_URL` defaults to `http://127.0.0.1:6333`. `--input /path/to/catalog.json`
+selects another prepared catalog. Ingestion uses the cached model offline.
+
+All cards are validated before connections are opened. All normalized
+384-dimensional embeddings are computed and checked before catalog writes.
+Cards receive the `passage: ` prefix and use the benchmark's pinned model revision.
+
+`public.products` stores all prepared fields with UUID as primary key. Prices
+use PostgreSQL `NUMERIC` and Python `Decimal` from the original `raw_fields`
+price string; missing RAM/storage stay `NULL`. The table is initialized by the
+packaged `products.sql`; incompatible existing schemas are rejected.
+
+The Qdrant collection `smartphones` uses 384-dimensional Cosine vectors with
+the same UUIDs. Payloads hold the card text, model name and revision; numerical
+characteristics remain in PostgreSQL. Writes use upsert, so reruns update existing
+records. Extra IDs, incompatible vector settings or a different model revision
+cause an error; the loader does not delete products or recreate collections.
+
+PostgreSQL writes commit in one transaction, followed by Qdrant uploads. These
+stores have no shared transaction: an interrupted Qdrant upload can leave a
+partial result. The command reports failure; rerun the same command to repair it.
+Success requires matching ID sets/counts, all stored product values, payloads,
+vectors and a technical nearest-neighbor search check.
+
+Local full-catalog verification on November 27, 2026: both databases contain
+1,816 records with identical UUID sets. Two complete ingestion runs took 195.19 s
+and 86.40 s; model loading and encoding accounted for 192.07 s and 84.71 s.
+These are individual local measurements, not a throughput benchmark. Complete
+stored content matched after the rerun. All prices and raw fields matched the
+source CSV; 483 missing RAM values and 25 missing storage values remained `NULL`.
+Technical search checks do not measure general retrieval quality.
+
+### Separate embedding benchmark
 
 Run the separate embedding benchmark:
 
@@ -232,6 +277,10 @@ revision, source checksum, timings and top-five results.
 | --- | --- |
 | [scripts/benchmark_embeddings.py](scripts/benchmark_embeddings.py) | Local CSV reading and sample benchmark |
 | [src/smartphone_shopping_assistant/prepare.py](src/smartphone_shopping_assistant/prepare.py) | CSV validation, stable IDs and JSON preparation |
+| [src/smartphone_shopping_assistant/ingest.py](src/smartphone_shopping_assistant/ingest.py) | Offline embeddings, upserts and cross-store verification |
+| [src/smartphone_shopping_assistant/products.sql](src/smartphone_shopping_assistant/products.sql) | Initial product table schema |
+| [tests/test_ingest.py](tests/test_ingest.py) | Synthetic validation and collection compatibility checks |
+| [tests/test_ingest_integration.py](tests/test_ingest_integration.py) | Opt-in PostgreSQL rollback, interrupted upload and rerun checks |
 | [tests/test_prepare.py](tests/test_prepare.py) | Validation, identity stability and repeatability tests |
 | [pyproject.toml](pyproject.toml) | Dependencies and code-check configuration |
 | [uv.lock](uv.lock) | Locked dependency versions |
@@ -250,3 +299,14 @@ The benchmark checks vector dimensions, finite values and unit norms.
 Preparation tests cover missing values, invalid numbers, duplicate identities,
 stable IDs, repeated runs and preservation of the output file on validation failure.
 Source data, model weights, local reports and the Python environment are excluded from Git.
+
+To also run the PostgreSQL integration tests, use the local `.env` and a database
+user with permission to create databases:
+
+```bash
+SSA_RUN_INTEGRATION=1 uv run --locked pytest -q
+```
+
+These tests create and remove disposable `ssa_ingest_test_*` databases and use
+synthetic cards with an in-memory Qdrant client. They do not modify the catalog
+databases. Full-catalog loading is verified separately against the running services.
