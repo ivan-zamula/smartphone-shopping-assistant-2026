@@ -18,8 +18,8 @@ or external LLMs. Blue dashed arrows show agent calls to the order and account A
 
 ![Target service architecture](assets/architecture.svg)
 
-The service layer and infrastructure integrations are planned. The current
-implementation covers catalog preparation and a local embedding benchmark;
+The service layer and application integrations are planned. PostgreSQL runs locally;
+the current implementation covers catalog preparation and a local embedding benchmark;
 the first version focuses on RAG search, with agents deferred.
 
 ### Current implementation
@@ -111,6 +111,7 @@ missing memory values as unknown. Prices describe the source dataset, not curren
 | Embeddings | Sentence Transformers, PyTorch CPU, multilingual-e5-small | Installed and checked |
 | Sample ranking | NumPy | Used in the benchmark |
 | Code checks | Ruff | Configured and checked |
+| Relational database | PostgreSQL 18.7 | Running locally; SQL access and persistence verified |
 | Vector database | Qdrant | Client installed; database not created |
 | Web interface | Streamlit | Planned |
 | Answer generation | LLM | Planned; model not selected |
@@ -123,6 +124,35 @@ The benchmark was checked on Linux with Python 3.12. Install
 ```bash
 uv sync --locked --dev
 ```
+
+### Local PostgreSQL
+
+PostgreSQL is configured in `docker-compose.yml` using `postgres:18.7-bookworm`.
+The host endpoint is `127.0.0.1:5432`; the database and user default to `smartphones`.
+Other Compose services connect to `postgres:5432`.
+
+Before starting containers, copy `.env.example` to `.env` if you do not already
+have a local `.env`, then set a nonempty `POSTGRES_PASSWORD`. You can also change
+`POSTGRES_DB`, `POSTGRES_USER` and `POSTGRES_PORT` there. `.env` is excluded from Git.
+
+```bash
+test -f .env || cp .env.example .env
+# Set POSTGRES_PASSWORD in .env before continuing.
+docker compose config --quiet
+docker compose up -d --wait postgres
+docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1;"'
+```
+
+The healthcheck uses `pg_isready`. Data is stored locally in `var/postgres/`,
+which is excluded from Git; PostgreSQL 18 mounts it at `/var/lib/postgresql`.
+Database initialization settings apply when the data directory is empty;
+changing `.env` later does not update existing database credentials.
+See the [official image documentation](https://github.com/docker-library/docs/blob/master/postgres/README.md).
+
+Local verification passed: the container is healthy, SQL access works over TCP
+with password authentication, and a probe record survived container recreation.
+The probe schema was removed afterward. Product tables, catalog loading and
+application database connections are not implemented yet.
 
 Download the CSV from the dataset page to `var/raw/smartphones.csv`, then prepare it:
 

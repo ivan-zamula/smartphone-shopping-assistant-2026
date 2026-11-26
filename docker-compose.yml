@@ -1,6 +1,24 @@
 name: smartphone-shopping-assistant-2026
 
 services:
+  postgres:
+    image: postgres:18.7-bookworm
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smartphones}
+      POSTGRES_USER: ${POSTGRES_USER:-smartphones}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./var/postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
   qdrant:
     image: qdrant/qdrant:v1.20.2
     ports:
