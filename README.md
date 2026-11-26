@@ -7,7 +7,8 @@ and choose phones using retrieved records. The first interface will use Streamli
 
 **Current status:** all 1,816 catalog records have been validated and prepared as
 text cards. A local embedding benchmark has been checked on 100 records.
-Full-catalog embeddings, Qdrant, the web interface and answer generation are not implemented yet.
+PostgreSQL and Qdrant run locally; SQL/API access and data persistence have been checked.
+Full-catalog embeddings, the web interface and answer generation are not implemented yet.
 
 ## Architecture
 
@@ -18,7 +19,7 @@ or external LLMs. Blue dashed arrows show agent calls to the order and account A
 
 ![Target service architecture](assets/architecture.svg)
 
-The service layer and application integrations are planned. PostgreSQL runs locally;
+The service layer and application integrations are planned. PostgreSQL and Qdrant run locally;
 the current implementation covers catalog preparation and a local embedding benchmark;
 the first version focuses on RAG search, with agents deferred.
 
@@ -75,8 +76,8 @@ Prepared catalog -> local embeddings -> Qdrant
 Streamlit -> query embeddings + explicit filters -> Qdrant -> LLM -> answer with sources
 ```
 
-Docker Compose configuration for Qdrant is prepared; a running database has not
-been verified. The answer-generation model still needs to be selected.
+Qdrant is running locally with verified API access and data persistence.
+Full-catalog indexing is still pending. The answer-generation model still needs to be selected.
 Numeric constraints will use metadata filters. This version covers one catalog;
 an agent, historical sales and aggregate statistics are outside its scope.
 
@@ -112,7 +113,7 @@ missing memory values as unknown. Prices describe the source dataset, not curren
 | Sample ranking | NumPy | Used in the benchmark |
 | Code checks | Ruff | Configured and checked |
 | Relational database | PostgreSQL 18.7 | Running locally; SQL access and persistence verified |
-| Vector database | Qdrant | Client installed; database not created |
+| Vector database | Qdrant 1.20.2 | Running locally; API, search and persistence verified |
 | Web interface | Streamlit | Planned |
 | Answer generation | LLM | Planned; model not selected |
 
@@ -153,6 +154,25 @@ Local verification passed: the container is healthy, SQL access works over TCP
 with password authentication, and a probe record survived container recreation.
 The probe schema was removed afterward. Product tables, catalog loading and
 application database connections are not implemented yet.
+
+### Local Qdrant
+
+Qdrant runs in Docker at `http://127.0.0.1:6333` using `qdrant/qdrant:v1.20.2`.
+With `.env` configured as above, start the service and check readiness and collections:
+
+```bash
+docker compose up -d qdrant
+curl --fail --silent --show-error http://127.0.0.1:6333/readyz
+curl --fail --silent --show-error http://127.0.0.1:6333/collections
+```
+
+Data is stored in `var/qdrant/storage/`, mounted at `/qdrant/storage` and excluded
+from Git. Local verification covered `/healthz`, `/readyz`, writing and reading
+three synthetic 3-dimensional vectors with payloads, and nearest-neighbor search.
+The records and search results survived container recreation. The test collection
+was deleted afterward; the smartphone catalog has not been indexed yet.
+
+### Catalog preparation and embedding benchmark
 
 Download the CSV from the dataset page to `var/raw/smartphones.csv`, then prepare it:
 
