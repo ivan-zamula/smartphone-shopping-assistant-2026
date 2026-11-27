@@ -240,6 +240,28 @@ def test_timeout_after_hydration(monkeypatch, compare):
     assert session.last_successful_ids == saved and session.semantic_query == ""
 
 
+@pytest.mark.parametrize(("elapsed", "reason"), [(179, "search_error"), (181, "deadline")])
+def test_hydration_exception_respects_deadline_and_preserves_session(monkeypatch, elapsed, reason):
+    service, engine, _, session = setup()
+    initial = service.handle("phone", session)
+    now = 100
+
+    def hydrate(ids):
+        nonlocal now
+        now += elapsed
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(engine, "get_products", hydrate)
+    monkeypatch.setattr("smartphone_shopping_assistant.workflow.monotonic", lambda: now)
+    result = service.handle("handset", session, FilterPatch(brands=["Test"]))
+    assert result.status == "error" and not result.items
+    assert result.diagnostics.stop_reason == reason
+    assert result.steps[-1].node == "finalize" and result.steps[-1].failed
+    assert session.semantic_query == "phone"
+    assert session.filters == initial.filters
+    assert session.last_successful_ids == [item.id for item in initial.items]
+
+
 @pytest.mark.parametrize("empty_vectors", [False, True])
 def test_retry_interleaves_ranks_and_preserves_original_and_filters(monkeypatch, empty_vectors):
     service, engine, llm, session = setup()
@@ -288,6 +310,38 @@ def test_unusable_rewrite_finishes_without_retry(rewrite):
     assert result.status == "ok"
     assert result.diagnostics.stop_reason == "rewrite_rejected"
     assert len(engine.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("original", "proposal"),
+    [
+        ("black phone", "white phone"),
+        ("чёрный телефон", "белый смартфон"),
+        ("black phone", "black phone\x00 white"),
+        ("black phone", "\tblack handset"),
+        ("phone", "phone\u202e handset"),
+        ("black phone", "not black handset"),
+        ("phone without NFC", "phone with NFC"),
+        ("phone", "unlocked handset"),
+    ],
+)
+def test_unsafe_rewrite_never_reaches_retrieval_or_diagnostics(original, proposal):
+    service, engine, llm, session = setup()
+    llm.rewrite = proposal
+    result = service.handle(original, session)
+    assert result.status == "ok"
+    assert result.diagnostics.stop_reason == "rewrite_rejected"
+    assert result.diagnostics.search_attempts == len(engine.requests) == 1
+    assert result.diagnostics.queries == [original]
+
+
+def test_rewrite_can_keep_color_and_rephrase_product():
+    service, engine, llm, session = setup()
+    llm.rewrite = "black handset"
+    result = service.handle("black phone", session, FilterPatch(brands=["Test"]))
+    assert result.status == "ok"
+    assert result.diagnostics.queries == ["black phone", "black phone. black handset"]
+    assert [request.filters.brands for request in engine.requests] == [["Test"], ["Test"]]
 
 
 def test_sql_empty_and_failed_retrieval_skip_evaluation_and_retry():
@@ -451,6 +505,44 @@ def test_sql_empty_on_retry_does_not_commit_first_selection(monkeypatch):
     assert result.diagnostics.stop_reason == "sql_empty"
     assert result.diagnostics.search_attempts == 2
     assert session.last_successful_ids == saved
+
+
+def test_concurrent_requests_on_one_session_preserve_both_filter_updates(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    service, _, llm, session = setup()
+    first_entered, release_first, second_started, second_entered = (Event() for _ in range(4))
+    parse = llm.parse
+
+    def blocking_parse(query, contextual_info, deadline):
+        if query == "phone":
+            first_entered.set()
+            assert release_first.wait(5)
+        else:
+            second_entered.set()
+        return parse(query, contextual_info, deadline)
+
+    def second_request():
+        second_started.set()
+        return service.handle("handset", session, FilterPatch(ram_gb={"minimum": 8}))
+
+    monkeypatch.setattr(llm, "parse", blocking_parse)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(service.handle, "phone", session, FilterPatch(brands=["Test"]))
+        try:
+            assert first_entered.wait(5)
+            second = pool.submit(second_request)
+            assert second_started.wait(5)
+            assert not second_entered.wait(0.2)
+        finally:
+            release_first.set()
+        assert first.result(timeout=5).status == "ok"
+        assert second.result(timeout=5).status == "ok"
+
+    assert session.filters.brands == ["Test"]
+    assert session.filters.ram_gb.minimum == 8
+    assert session.semantic_query == "handset"
 
 
 def test_concurrent_requests_count_http_calls_independently():

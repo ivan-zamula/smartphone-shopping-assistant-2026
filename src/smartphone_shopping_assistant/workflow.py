@@ -6,6 +6,7 @@ import re
 from itertools import zip_longest
 from time import monotonic, perf_counter
 from typing import Literal, TypedDict
+from unicodedata import category
 from uuid import UUID, uuid4
 
 from langgraph.errors import GraphRecursionError
@@ -156,6 +157,18 @@ _PURE_CHEAPER = re.compile(
     r"(?:show\s+)?(?:cheaper|less expensive)(?:\s+than\s+the\s+first)?",
     re.I,
 )
+_NEGATION = re.compile(
+    r"\b(?:not|no|without|except|excluding|не|ни|нет|без|кроме|исключая)\b|n['’]t\b"
+)
+_CONSTRAINT_TERM = re.compile(
+    r"(?:black|white|gray|grey|silver|gold(?:en)?|blue|green|red|pink|purple|"
+    r"yellow|orange|brown|beige|violet|graphite|"
+    r"ч[её]рн\w*|бел\w*|сер(?:ый|ая|ое|ые|ого|ой|ых|ым|ую)|серебрист\w*|"
+    r"золотист\w*|золот[а-я]+|син\w*|голуб\w*|зел[её]н\w*|красн\w*|"
+    r"розов\w*|фиолетов\w*|ж[её]лт\w*|оранжев\w*|коричнев\w*|бежев\w*|графитов\w*|"
+    r"unlocked|locked|carrier|esim|sim|nfc|ram|storage|cheap\w*|expensive|budget|"
+    r"разблокир\w*|залоч\w*|озу|памят\w*|деш[её]в\w*|дешевле|бюджет\w*)"
+)
 
 
 def _merge(base: SearchFilters, patch: FilterPatch) -> SearchFilters:
@@ -176,20 +189,27 @@ def _query_key(query: str) -> tuple[str, ...]:
 
 def _anchored_query(original: str, proposal: str) -> str | None:
     """Keep the original wording as a retrieval anchor for model-generated terms."""
-    proposal = proposal.strip()
-    if not 1 <= len(proposal) <= 500 or not _query_key(proposal) or _UNSUPPORTED.search(proposal):
+    if any(category(char) in {"Cc", "Cf"} for char in proposal):
         return None
-    original_tokens = set(_query_key(original))
+    proposal = proposal.strip()
+    proposed_terms = _query_key(proposal)
+    if not 1 <= len(proposal) <= 500 or not proposed_terms or _UNSUPPORTED.search(proposal):
+        return None
+    original_terms = _query_key(original)
+    if original_terms == proposed_terms:
+        return original
+    # Appending the original cannot resolve changed negation or a new explicit constraint.
+    if _NEGATION.search(original.casefold()) or _NEGATION.search(proposal.casefold()):
+        return None
+    original_tokens = set(original_terms)
     if any(
-        any(char.isdecimal() for char in word) and word not in original_tokens
-        for word in _query_key(proposal)
+        any(char.isdecimal() for char in word) or _CONSTRAINT_TERM.fullmatch(word)
+        for word in set(proposed_terms) - original_tokens
     ):
         return None
     numbers = r"\d+(?:[.,]\d+)*"
     if set(re.findall(numbers, proposal)) - set(re.findall(numbers, original)):
         return None
-    if _query_key(original) == _query_key(proposal):
-        return original
     if not re.match(re.escape(original) + r"(?!\w)", proposal, re.I):
         proposal = f"{original}. {proposal}"
     return proposal if len(proposal) <= 500 else None
@@ -472,6 +492,8 @@ def build_workflow(engine: SearchEngine, llm: LocalLLM) -> CompiledStateGraph:
                 entered = True
                 return node(state)
             except Exception as exc:
+                if entered and monotonic() >= state["deadline"]:
+                    raise NodeFailed(name, entered=entered) from TimeoutError()
                 raise NodeFailed(name, entered=entered) from exc
 
         return run
