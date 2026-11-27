@@ -8,7 +8,7 @@ import streamlit as st
 
 from smartphone_shopping_assistant.contracts import FilterPatch, ProductCard
 from smartphone_shopping_assistant.dialogue import SearchService, SessionState
-from smartphone_shopping_assistant.i18n import translate
+from smartphone_shopping_assistant.i18n import NODE_LABELS, STOP_LABELS, translate
 from smartphone_shopping_assistant.llm import MODEL
 
 
@@ -125,6 +125,26 @@ def _show(response) -> None:
                 ],
             }
         )
+
+
+def _show_diagnostics(response) -> None:
+    diagnostics = response.diagnostics
+    if diagnostics is None:
+        return
+    with st.expander(_t("Как выполнен поиск"), expanded=False):
+        st.caption(
+            _t("Попытки: {attempts} · Вызовы Ollama: {calls} · Кандидаты: {candidates}").format(
+                attempts=diagnostics.search_attempts,
+                calls=diagnostics.ollama_calls,
+                candidates=diagnostics.candidate_count,
+            )
+        )
+        st.caption(f"{_t('Остановка')} · {_t(STOP_LABELS[diagnostics.stop_reason])}")
+        for number, query in enumerate(diagnostics.queries, 1):
+            st.text(f"{_t('Запрос')} {number} · {query}")
+        for step in response.steps:
+            failed = f" · {_t('ошибка')}" if step.failed else ""
+            st.caption(f"{_t(NODE_LABELS[step.node])} · {step.elapsed_ms:.0f} {_t('мс')}{failed}")
 
 
 @st.cache_resource
@@ -247,6 +267,7 @@ def main() -> None:
             st.write(question)
         with st.chat_message("assistant"):
             _show(answer)
+            _show_diagnostics(answer)
     if action is not None:
         with st.spinner(_t("Подбираем смартфоны…")):
             response = _service().handle(action, st.session_state.dialogue, ui_changes=patch)

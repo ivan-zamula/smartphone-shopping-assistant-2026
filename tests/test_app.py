@@ -232,3 +232,33 @@ def test_english_cards_and_comparison_preserve_catalog_facts():
     assert "Feature" in app.table[0].value.columns
     assert app.table[0].value.iloc[4, 1] == "Negro"
     assert app.table[0].value.iloc[6, 1] == "100.25 USD*"
+
+
+def test_search_diagnostics_collapsed_and_translated():
+    from smartphone_shopping_assistant.workflow import WorkflowDiagnostics, WorkflowStep
+
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py").run()
+    answer = DialogueResponse(
+        request_id=uuid4(),
+        status="ok",
+        steps=[WorkflowStep(node="retrieve", elapsed_ms=82)],
+        diagnostics=WorkflowDiagnostics(
+            queries=["phone"],
+            search_attempts=1,
+            ollama_calls=4,
+            candidate_count=20,
+            stop_reason="sufficient",
+        ),
+    )
+    app.session_state.history = [("phone", answer)]
+    app.run()
+    assert not app.exception
+    panel = app.expander[0]
+    assert panel.label == "Как выполнен поиск" and panel.proto.expanded is False
+    assert any("Кандидаты: 20" in item.value for item in panel.caption)
+    app.selectbox(key="ui_language").set_value("en").run()
+    panel = app.expander[0]
+    assert panel.label == "Search execution" and panel.proto.expanded is False
+    assert any("Ollama calls: 4" in item.value for item in panel.caption)
+    assert any("Retrieve candidates" in item.value for item in panel.caption)
+    assert panel.text[0].value == "Query 1 · phone"

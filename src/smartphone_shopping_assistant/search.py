@@ -3,6 +3,7 @@
 import os
 import time
 from contextlib import closing
+from dataclasses import dataclass
 from functools import lru_cache
 from uuid import UUID
 
@@ -18,6 +19,17 @@ from .ingest import Settings as IngestSettings
 
 class SearchUnavailable(RuntimeError):
     """A safe stage-specific retrieval failure."""
+
+
+@dataclass(frozen=True)
+class Retrieval:
+    candidates: list[SearchCandidate]
+    sql_empty: bool = False
+
+
+def _check_deadline(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError
 
 
 @lru_cache(maxsize=1)
@@ -146,6 +158,17 @@ class SearchEngine:
     def retrieve(
         self, request: SearchRequest, candidate_limit=20, *, timings: dict | None = None
     ) -> list[SearchCandidate]:
+        return self.retrieve_with_status(request, candidate_limit, timings=timings).candidates
+
+    def retrieve_with_status(
+        self,
+        request: SearchRequest,
+        candidate_limit=20,
+        *,
+        timings: dict | None = None,
+        deadline: float | None = None,
+    ) -> Retrieval:
+        _check_deadline(deadline)
         if candidate_limit < 1:
             raise ValueError("candidate_limit must be positive")
         started = time.perf_counter()
@@ -155,14 +178,17 @@ class SearchEngine:
             if len(eligible) != len(ids):
                 raise ValueError("Duplicate SQL product ID")
         except Exception as exc:
+            _check_deadline(deadline)
             raise SearchUnavailable("PostgreSQL filter stage unavailable") from exc
         if timings is not None:
             timings["sql_ms"] = (time.perf_counter() - started) * 1000
+        _check_deadline(deadline)
         if not ids:
-            return []
+            return Retrieval([], sql_empty=True)
         started = time.perf_counter()
         try:
             encoder = self.encoder or _cached_encoder()
+            _check_deadline(deadline)
             vector = np.asarray(
                 encoder.encode("query: " + request.query, normalize_embeddings=True, device="cpu"),
                 dtype=np.float32,
@@ -174,13 +200,16 @@ class SearchEngine:
             ):
                 raise ValueError("Invalid query embedding")
         except Exception as exc:
+            _check_deadline(deadline)
             raise SearchUnavailable("Query encoder unavailable") from exc
+        _check_deadline(deadline)
         if timings is not None:
             timings["embedding_ms"] = (time.perf_counter() - started) * 1000
         started = time.perf_counter()
         try:
             with closing(QdrantClient(url=self.settings.qdrant_url)) as client:
                 config = client.get_collection(COLLECTION).config.params.vectors
+                _check_deadline(deadline)
                 if (
                     not isinstance(config, models.VectorParams)
                     or config.size != DIMENSION
@@ -196,6 +225,7 @@ class SearchEngine:
                     limit=min(candidate_limit, len(ids)),
                     with_payload=True,
                 ).points
+                _check_deadline(deadline)
             ordered, seen = [], set()
             for hit in hits:
                 product_id = _uuid(hit.id)
@@ -213,14 +243,17 @@ class SearchEngine:
                 ordered.append((product_id, hit.score))
             ordered.sort(key=lambda item: (-item[1], str(item[0])))
         except Exception as exc:
+            _check_deadline(deadline)
             raise SearchUnavailable("Qdrant retrieval unavailable") from exc
         if timings is not None:
             timings["qdrant_ms"] = (time.perf_counter() - started) * 1000
+        _check_deadline(deadline)
         if not ordered:
-            return []
+            return Retrieval([])
         started = time.perf_counter()
         try:
             products = self.get_products([product_id for product_id, _ in ordered])
+            _check_deadline(deadline)
             if set(products) != seen:
                 raise ValueError("Missing PostgreSQL product")
             if any(not self._matches(product, request.filters) for product in products.values()):
@@ -231,6 +264,7 @@ class SearchEngine:
             ]
             if timings is not None:
                 timings["hydration_ms"] = (time.perf_counter() - started) * 1000
-            return result
+            return Retrieval(result)
         except Exception as exc:
+            _check_deadline(deadline)
             raise SearchUnavailable("PostgreSQL hydration unavailable") from exc

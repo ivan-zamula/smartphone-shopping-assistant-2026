@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
+from itertools import zip_longest
 from time import monotonic, perf_counter
 from typing import Literal, TypedDict
 from uuid import UUID, uuid4
 
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langsmith import tracing_context
@@ -22,24 +24,97 @@ from .contracts import (
     SearchRequest,
     SearchResponse,
 )
-from .llm import LocalLLM, literal_brands
+from .llm import (
+    InvalidModelResponse,
+    LLMCallLimitExceeded,
+    LLMDeadlineExceeded,
+    LLMUnavailable,
+    LocalLLM,
+    OllamaCalls,
+    ResultEvaluation,
+    literal_brands,
+    ollama_calls,
+)
 from .search import SearchEngine
 
 NodeName = Literal[
-    "parse_validate", "clarify", "compare", "prepare_query", "retrieve", "select", "finalize"
+    "parse_validate",
+    "clarify",
+    "compare",
+    "prepare_query",
+    "retrieve",
+    "select",
+    "evaluate",
+    "rewrite",
+    "finalize",
 ]
 Status = Literal["ok", "empty", "needs_clarification", "error"]
 ERROR_MESSAGE = "Поиск сейчас недоступен. Повторите запрос позже."
 
 
+StopReason = Literal[
+    "sufficient",
+    "retry_complete",
+    "rewrite_rejected",
+    "sql_empty",
+    "clarification",
+    "comparison",
+    "empty",
+    "search_error",
+    "model_unavailable",
+    "invalid_model",
+    "deadline",
+    "call_limit",
+    "graph_limit",
+]
+STOP_MESSAGES = {
+    "search_error": ERROR_MESSAGE,
+    "model_unavailable": "Локальная модель недоступна. Повторите запрос позже.",
+    "invalid_model": "Локальная модель вернула некорректный ответ.",
+    "deadline": "Время поиска истекло. Повторите запрос.",
+    "call_limit": "Достигнут лимит обращений к локальной модели.",
+    "graph_limit": "Достигнут лимит шагов поиска.",
+}
+
+
+class NodeFailed(RuntimeError):
+    def __init__(self, node: NodeName, *, entered: bool):
+        self.node = node
+        self.entered = entered
+
+
+def _stop_reason(error: BaseException) -> StopReason:
+    if isinstance(error, (TimeoutError, LLMDeadlineExceeded)):
+        return "deadline"
+    if isinstance(error, LLMCallLimitExceeded):
+        return "call_limit"
+    if isinstance(error, GraphRecursionError):
+        return "graph_limit"
+    if isinstance(error, InvalidModelResponse):
+        return "invalid_model"
+    if isinstance(error, LLMUnavailable):
+        return "model_unavailable"
+    return "search_error"
+
+
 class WorkflowStep(Contract):
     node: NodeName
     elapsed_ms: float = Field(ge=0)
+    failed: bool = False
+
+
+class WorkflowDiagnostics(Contract):
+    queries: list[str] = Field(max_length=2)
+    search_attempts: int = Field(ge=0, le=2)
+    ollama_calls: int = Field(ge=0, le=8)
+    candidate_count: int = Field(ge=0, le=40)
+    stop_reason: StopReason
 
 
 class DialogueResponse(SearchResponse):
     comparison: list[ProductCard] = Field(default_factory=list)
     steps: list[WorkflowStep] = Field(default_factory=list)
+    diagnostics: WorkflowDiagnostics | None = None
 
 
 class WorkflowState(TypedDict, total=False):
@@ -54,13 +129,18 @@ class WorkflowState(TypedDict, total=False):
     merged_filters: SearchFilters
     clarification: str
     request: SearchRequest
+    original_query: str
+    queries: list[str]
+    first_candidates: list[SearchCandidate]
     candidates: list[SearchCandidate]
+    evaluation: ResultEvaluation
+    stop_reason: StopReason
     status: Status
     message: str
     items: list[ProductCard]
     comparison: list[ProductCard]
-    session_request: SearchRequest
-    selected_ids: list[UUID]
+    session_request: SearchRequest | None
+    selected_ids: list[UUID] | None
     response: DialogueResponse
 
 
@@ -88,6 +168,42 @@ def _merge(base: SearchFilters, patch: FilterPatch) -> SearchFilters:
 def _check_deadline(state: WorkflowState) -> None:
     if monotonic() >= state["deadline"]:
         raise TimeoutError
+
+
+def _query_key(query: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"\w+", query.casefold()))
+
+
+def _anchored_query(original: str, proposal: str) -> str | None:
+    """Keep the original wording as a retrieval anchor for model-generated terms."""
+    proposal = proposal.strip()
+    if not 1 <= len(proposal) <= 500 or not _query_key(proposal) or _UNSUPPORTED.search(proposal):
+        return None
+    original_tokens = set(_query_key(original))
+    if any(
+        any(char.isdecimal() for char in word) and word not in original_tokens
+        for word in _query_key(proposal)
+    ):
+        return None
+    numbers = r"\d+(?:[.,]\d+)*"
+    if set(re.findall(numbers, proposal)) - set(re.findall(numbers, original)):
+        return None
+    if _query_key(original) == _query_key(proposal):
+        return original
+    if not re.match(re.escape(original) + r"(?!\w)", proposal, re.I):
+        proposal = f"{original}. {proposal}"
+    return proposal if len(proposal) <= 500 else None
+
+
+def _merge_candidates(
+    first: list[SearchCandidate], second: list[SearchCandidate]
+) -> list[SearchCandidate]:
+    merged: dict[UUID, SearchCandidate] = {}
+    for pair in zip_longest(first[:20], second[:20]):
+        for candidate in pair:
+            if candidate is not None:
+                merged.setdefault(candidate.product.id, candidate)
+    return list(merged.values())
 
 
 def build_workflow(engine: SearchEngine, llm: LocalLLM) -> CompiledStateGraph:
@@ -210,83 +326,178 @@ def build_workflow(engine: SearchEngine, llm: LocalLLM) -> CompiledStateGraph:
 
     def prepare_query(state: WorkflowState) -> WorkflowState:
         text = state["text"]
-        query = (
+        original = (
             text if text and not _CHEAPER.search(text) else state["previous_query"] or "смартфон"
         )
-        return {"request": SearchRequest(query=query, filters=state["merged_filters"])}
+        filters = state["merged_filters"]
+        proposed = llm.prepare_query(
+            original, filters.model_dump(mode="json"), deadline=state["deadline"]
+        )
+        _check_deadline(state)
+        query = _anchored_query(original, proposed) or original
+        return {"original_query": original, "request": SearchRequest(query=query, filters=filters)}
 
     def retrieve(state: WorkflowState) -> WorkflowState:
         request = state["request"]
+        queries = [*state.get("queries", []), request.query]
+        result = engine.retrieve_with_status(
+            request, candidate_limit=20, deadline=state["deadline"]
+        )
         _check_deadline(state)
-        candidates = engine.retrieve(request, candidate_limit=20)
-        _check_deadline(state)
-        if not candidates:
+        if result.sql_empty:
             return {
+                "queries": queries,
+                "candidates": [],
+                "selected_ids": [],
                 "status": "empty",
+                "stop_reason": "sql_empty",
                 "message": "По заданным условиям товары не найдены.",
-                "session_request": request,
             }
-        return {"candidates": candidates}
+        candidates = result.candidates[:20]
+        first = state.get("first_candidates", candidates)
+        pool = (
+            _merge_candidates(first, candidates)
+            if len(queries) == 2
+            else _merge_candidates(first, [])
+        )
+        return {"queries": queries, "first_candidates": first, "candidates": pool}
 
     def after_retrieve(state: WorkflowState) -> Literal["select", "finalize"]:
-        return "select" if state.get("candidates") else "finalize"
+        return "finalize" if state.get("stop_reason") == "sql_empty" else "select"
 
     def select(state: WorkflowState) -> WorkflowState:
-        request = state["request"]
         candidates = state["candidates"][:10]
-        selection = llm.select(request.query, candidates, limit=5, deadline=state["deadline"])
-        _check_deadline(state)
-        if selection.abstain:
+        ids = []
+        if candidates:
+            selection = llm.select(
+                state["original_query"], candidates, limit=5, deadline=state["deadline"]
+            )
+            _check_deadline(state)
+            allowed = {candidate.product.id for candidate in candidates}
+            ids = selection.selected_ids
+            if (
+                selection.abstain != (not ids)
+                or len(ids) > 5
+                or len(ids) != len(set(ids))
+                or any(i not in allowed for i in ids)
+            ):
+                raise InvalidModelResponse("Invalid selected IDs")
+        if not ids:
             return {
                 "status": "empty",
                 "message": "Подходящие товары не выбраны.",
-                "session_request": request,
+                "selected_ids": [],
             }
-        allowed = {candidate.product.id for candidate in candidates}
-        ids = selection.selected_ids
-        if len(ids) > 5 or len(ids) != len(set(ids)) or any(i not in allowed for i in ids):
-            raise ValueError("Invalid selected IDs")
-        products = engine.get_products(ids)
-        _check_deadline(state)
-        if any(i not in products or not engine._matches(products[i], request.filters) for i in ids):
-            raise ValueError("Selected product changed")
         return {
             "status": "ok",
             "message": "Товары из каталога; валюта источника не подтверждена, пересчёта нет.",
-            "items": [products[i] for i in ids],
-            "session_request": request,
             "selected_ids": ids,
         }
 
-    def finalize(state: WorkflowState) -> WorkflowState:
+    def after_select(state: WorkflowState) -> Literal["evaluate", "finalize"]:
+        return "evaluate" if len(state["queries"]) == 1 else "finalize"
+
+    def evaluate(state: WorkflowState) -> WorkflowState:
+        request = state["request"]
+        by_id = {candidate.product.id: candidate for candidate in state["candidates"]}
+        selected = [by_id[i] for i in state["selected_ids"]]
+        evaluation = llm.evaluate(
+            state["original_query"],
+            request.query,
+            request.filters.model_dump(mode="json"),
+            selected,
+            deadline=state["deadline"],
+        )
         _check_deadline(state)
-        request = state.get("session_request")
+        if (evaluation.reason == "no_candidates") != (not selected):
+            raise InvalidModelResponse("Evaluation does not match selected products")
+        return {"evaluation": evaluation}
+
+    def after_evaluate(state: WorkflowState) -> Literal["finalize", "rewrite"]:
+        return "finalize" if state["evaluation"].sufficient else "rewrite"
+
+    def rewrite(state: WorkflowState) -> WorkflowState:
+        proposed = state["evaluation"].rewrite
+        original = state["original_query"]
+        keys = {_query_key(q) for q in [original, *state["queries"]]}
+        query = _anchored_query(original, proposed) if proposed is not None else None
+        if query is None or _query_key(proposed) in keys or _query_key(query) in keys:
+            return {"stop_reason": "rewrite_rejected"}
+        request = state["request"]
+        return {"request": SearchRequest(query=query, filters=request.filters)}
+
+    def after_rewrite(state: WorkflowState) -> Literal["retrieve", "finalize"]:
+        return "finalize" if state.get("stop_reason") == "rewrite_rejected" else "retrieve"
+
+    def finalize(state: WorkflowState) -> WorkflowState:
+        request = state.get("request")
+        ids = (state.get("selected_ids") or []) if state["status"] == "ok" else []
+        items = []
+        if ids and request is not None:
+            products = engine.get_products(ids)
+            _check_deadline(state)
+            if any(
+                i not in products
+                or products[i].id != i
+                or not engine._matches(products[i], request.filters)
+                for i in ids
+            ):
+                raise ValueError("Selected product changed")
+            items = [products[i] for i in ids]
+        session_request = (
+            SearchRequest(query=state["original_query"], filters=request.filters)
+            if request is not None and state["status"] in ("ok", "empty")
+            else None
+        )
         return {
+            "session_request": session_request,
+            "selected_ids": ids if items else None,
             "response": DialogueResponse(
                 request_id=state["request_id"],
                 status=state["status"],
-                filters=request.filters if request is not None else state["filters"],
+                filters=session_request.filters
+                if session_request is not None
+                else state["filters"],
                 message=state["message"],
-                items=state.get("items", []),
+                items=items,
                 comparison=state.get("comparison", []),
-            )
+            ),
         }
 
+    def checked_node(name: NodeName, node):
+        def run(state: WorkflowState) -> WorkflowState:
+            entered = False
+            try:
+                _check_deadline(state)
+                entered = True
+                return node(state)
+            except Exception as exc:
+                raise NodeFailed(name, entered=entered) from exc
+
+        return run
+
     graph = StateGraph(WorkflowState)
-    graph.add_node("parse_validate", parse_validate)
-    graph.add_node("clarify", clarify)
-    graph.add_node("compare", compare)
-    graph.add_node("prepare_query", prepare_query)
-    graph.add_node("retrieve", retrieve)
-    graph.add_node("select", select)
-    graph.add_node("finalize", finalize)
+    for name, node in (
+        ("parse_validate", parse_validate),
+        ("clarify", clarify),
+        ("compare", compare),
+        ("prepare_query", prepare_query),
+        ("retrieve", retrieve),
+        ("select", select),
+        ("evaluate", evaluate),
+        ("rewrite", rewrite),
+        ("finalize", finalize),
+    ):
+        graph.add_node(name, checked_node(name, node))
     graph.add_edge(START, "parse_validate")
     graph.add_conditional_edges("parse_validate", after_parse)
     graph.add_edge("clarify", "finalize")
     graph.add_edge("compare", "finalize")
     graph.add_edge("prepare_query", "retrieve")
     graph.add_conditional_edges("retrieve", after_retrieve)
-    graph.add_edge("select", "finalize")
+    graph.add_conditional_edges("select", after_select)
+    graph.add_conditional_edges("evaluate", after_evaluate)
+    graph.add_conditional_edges("rewrite", after_rewrite)
     graph.add_edge("finalize", END)
     return graph.compile()
 
@@ -311,6 +522,10 @@ def run_workflow(
     steps: list[WorkflowStep] = []
     state = initial.copy()
     started = perf_counter()
+    calls = OllamaCalls()
+    token = ollama_calls.set(calls)
+    failed_reason: StopReason | None = None
+    retrieval_failed = False
     try:
         with tracing_context(enabled=False):
             for event in graph.stream(
@@ -322,17 +537,50 @@ def run_workflow(
                     started = now
                     state.update(update)
         response = state["response"]
-    except Exception:
-        return (
-            DialogueResponse(
-                request_id=initial["request_id"],
-                status="error",
-                filters=filters,
-                message=ERROR_MESSAGE,
-                steps=steps,
-            ),
-            None,
-            None,
+        _check_deadline(state)
+    except Exception as exc:
+        error = exc
+        if isinstance(exc, NodeFailed):
+            retrieval_failed = exc.node == "retrieve" and exc.entered
+            steps.append(
+                WorkflowStep(
+                    node=exc.node, elapsed_ms=(perf_counter() - started) * 1000, failed=True
+                )
+            )
+            error = exc.__cause__ or exc
+        failed_reason = _stop_reason(error)
+        response = DialogueResponse(
+            request_id=initial["request_id"],
+            status="error",
+            filters=filters,
+            message=STOP_MESSAGES[failed_reason],
         )
+    finally:
+        ollama_calls.reset(token)
+
+    queries = state.get("queries", [])
+    if retrieval_failed:
+        queries = [*queries, state["request"].query]
+    reason = failed_reason or state.get("stop_reason")
+    if reason is None:
+        if len(queries) == 2:
+            reason = "retry_complete"
+        elif "evaluation" in state:
+            reason = "sufficient"
+        elif response.status == "needs_clarification":
+            reason = "clarification"
+        elif response.comparison:
+            reason = "comparison"
+        else:
+            reason = "empty" if response.status == "empty" else "search_error"
     response.steps = steps
+    response.diagnostics = WorkflowDiagnostics(
+        queries=queries,
+        search_attempts=len(queries),
+        ollama_calls=calls.count,
+        candidate_count=len(state.get("candidates", [])),
+        stop_reason=reason,
+    )
+    if failed_reason:
+        return response, None, None
     return response, state.get("session_request"), state.get("selected_ids")

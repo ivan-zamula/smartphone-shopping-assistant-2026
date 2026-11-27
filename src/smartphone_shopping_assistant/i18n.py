@@ -1,6 +1,71 @@
 """English presentation text; catalog facts and user messages are never translated."""
 
+NODE_LABELS = {
+    "parse_validate": "Разбор запроса",
+    "clarify": "Уточнение",
+    "compare": "Сравнение",
+    "prepare_query": "Подготовка запроса",
+    "retrieve": "Поиск кандидатов",
+    "select": "Отбор кандидатов",
+    "evaluate": "Оценка выдачи",
+    "rewrite": "Переформулировка",
+    "finalize": "Проверка и ответ",
+}
+
+STOP_LABELS = {
+    "sufficient": "Выдача достаточна",
+    "retry_complete": "Повторный поиск выполнен",
+    "rewrite_rejected": "Нет подходящей новой формулировки",
+    "sql_empty": "Каталог пуст по заданным фильтрам",
+    "clarification": "Нужно уточнение",
+    "comparison": "Сравнение выполнено",
+    "empty": "Выдача пуста",
+    "search_error": "Ошибка поиска",
+    "model_unavailable": "Сбой локальной модели",
+    "invalid_model": "Некорректный ответ модели",
+    "deadline": "Истекло время поиска",
+    "call_limit": "Лимит вызовов Ollama",
+    "graph_limit": "Лимит шагов графа",
+}
+
 ENGLISH = {
+    "Как выполнен поиск": "Search execution",
+    "Попытки: {attempts} · Вызовы Ollama: {calls} · Кандидаты: {candidates}": (
+        "Search attempts: {attempts} · Ollama calls: {calls} · Candidates: {candidates}"
+    ),
+    "Остановка": "Stop reason",
+    "Запрос": "Query",
+    "ошибка": "failed",
+    "мс": "ms",
+    "Локальная модель недоступна. Повторите запрос позже.": (
+        "The local model is unavailable. Please try again later."
+    ),
+    "Локальная модель вернула некорректный ответ.": "The local model returned an invalid response.",
+    "Время поиска истекло. Повторите запрос.": "The search timed out. Please try again.",
+    "Достигнут лимит обращений к локальной модели.": "The local model call limit was reached.",
+    "Достигнут лимит шагов поиска.": "The search step limit was reached.",
+    "Разбор запроса": "Interpret request",
+    "Уточнение": "Clarify",
+    "Сравнение": "Compare",
+    "Подготовка запроса": "Prepare search query",
+    "Поиск кандидатов": "Retrieve candidates",
+    "Отбор кандидатов": "Select candidates",
+    "Оценка выдачи": "Evaluate results",
+    "Переформулировка": "Rewrite query",
+    "Проверка и ответ": "Verify and respond",
+    "Выдача достаточна": "Results are sufficient",
+    "Повторный поиск выполнен": "Retry completed",
+    "Нет подходящей новой формулировки": "No usable rewrite",
+    "Каталог пуст по заданным фильтрам": "No catalog products match the filters",
+    "Нужно уточнение": "Clarification needed",
+    "Сравнение выполнено": "Comparison completed",
+    "Выдача пуста": "No results",
+    "Ошибка поиска": "Search failed",
+    "Сбой локальной модели": "Local model unavailable",
+    "Некорректный ответ модели": "Invalid model response",
+    "Истекло время поиска": "Search timed out",
+    "Лимит вызовов Ollama": "Ollama call limit",
+    "Лимит шагов графа": "Graph step limit",
     "Подбор смартфона": "Smartphone shopping assistant",
     "📱 Подбор смартфона": "📱 Smartphone shopping assistant",
     "Локальная модель: {model}. Поиск по каталогу, до 5 товаров в ответе.": (
