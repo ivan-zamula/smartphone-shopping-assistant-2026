@@ -103,6 +103,15 @@ def test_search_cheaper_compare_and_current_rows():
     service, engine, llm, session = setup()
     first = service.handle("phone", session)
     assert first.status == "ok" and len(first.items) == 2
+    assert [step.node for step in first.steps] == [
+        "parse_validate",
+        "prepare_query",
+        "retrieve",
+        "select",
+        "finalize",
+    ]
+    assert all(step.elapsed_ms >= 0 for step in first.steps)
+    assert len(engine.requests) == 1
     llm.next_intent = ParsedIntent(intent="refine")
     cheaper = service.handle("покажи дешевле", session)
     assert cheaper.status == "ok"
@@ -111,13 +120,18 @@ def test_search_cheaper_compare_and_current_rows():
         maximum=Decimal(100), include_maximum=False
     )
     llm.next_intent = ParsedIntent(intent="compare", previous_result_positions=[1, 2])
-    assert service.handle("compare first two", session).status == "needs_clarification"
+    clarification = service.handle("compare first two", session)
+    assert clarification.status == "needs_clarification"
+    assert [step.node for step in clarification.steps] == ["parse_validate", "clarify", "finalize"]
     llm.next_intent = ParsedIntent(intent="search")
     service.handle("phone", session, FilterPatch(price=None))
     llm.next_intent = ParsedIntent(intent="compare", previous_result_positions=[1, 2])
     before = llm.select_calls
     engine.products[UUID(int=1)] = card(1, 90)
+    searches_before = len(engine.requests)
     comparison = service.handle("compare first two", session)
+    assert [step.node for step in comparison.steps] == ["parse_validate", "compare", "finalize"]
+    assert len(engine.requests) == searches_before
     assert [c.price for c in comparison.comparison] == [Decimal(90), Decimal(80)]
     assert llm.select_calls == before and comparison.items == []
 
@@ -185,10 +199,8 @@ def test_compare_timeout_after_hydration(monkeypatch):
     service, engine, llm, session = setup()
     session.last_successful_ids = [UUID(int=1), UUID(int=2)]
     llm.next_intent = ParsedIntent(intent="compare", previous_result_positions=[1, 2])
-    ticks = iter([0, 0, 121])
-    monkeypatch.setattr(
-        "smartphone_shopping_assistant.dialogue.time.monotonic", lambda: next(ticks)
-    )
+    ticks = iter([0, 0, 0, 181])
+    monkeypatch.setattr("smartphone_shopping_assistant.workflow.monotonic", lambda: next(ticks))
     result = service.handle("compare", session)
     assert result.status == "error" and not result.items and not result.comparison
     assert session.last_successful_ids == [UUID(int=1), UUID(int=2)]
@@ -196,10 +208,8 @@ def test_compare_timeout_after_hydration(monkeypatch):
 
 def test_search_timeout_after_final_hydration(monkeypatch):
     service, engine, llm, session = setup()
-    ticks = iter([0, 0, 0, 0, 121])
-    monkeypatch.setattr(
-        "smartphone_shopping_assistant.dialogue.time.monotonic", lambda: next(ticks)
-    )
+    ticks = iter([0, 0, 0, 0, 0, 0, 181])
+    monkeypatch.setattr("smartphone_shopping_assistant.workflow.monotonic", lambda: next(ticks))
     result = service.handle("phone", session)
     assert result.status == "error" and not result.items and not result.comparison
     assert session.last_successful_ids == [] and session.semantic_query == ""
