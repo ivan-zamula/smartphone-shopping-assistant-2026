@@ -7,9 +7,9 @@ PostgreSQL filters, E5/Qdrant retrieval and selection by an installed Ollama mod
 
 **Current status:** all 1,816 catalog records are loaded into PostgreSQL and Qdrant
 with matching UUIDs. Text and sidebar filters, dialogue refinement and product
-comparison are implemented. Local acceptance passed: 123 tests, the live browser
-scenarios and paired retrieval/LLM evaluation. This is a local demo; production
-deployment has not been tested.
+comparison are implemented. LangGraph controls the dialogue and bounded search
+retry, with local execution diagnostics. Local checks passed: 156 tests and live
+RU/EN browser scenarios. This is a local demo; production deployment has not been tested.
 
 ## Interface
 
@@ -22,8 +22,8 @@ are preserved from the historical catalog; the source currency is unconfirmed.
 
 The diagram shows the target service architecture. The website calls the assistant,
 catalog, order, account and other services through their APIs. The assistant contains
-agents and RAG search, with access to Qdrant, a relational database and internal
-or external LLMs. Blue dashed arrows show agent calls to the order and account APIs.
+a LangGraph agent workflow and RAG search, with access to Qdrant, a relational
+database and internal or external LLMs. Blue dashed arrows show agent calls to the order and account APIs.
 
 ![Target service architecture](assets/architecture.svg)
 
@@ -77,17 +77,51 @@ stores full-catalog vectors in Qdrant. Model files remain in the Hugging Face ca
 
 ### Current application flow
 
-```text
-Streamlit -> local intent parsing + filter merge -> PostgreSQL candidate UUIDs
-E5 query + UUIDs -> Qdrant (20) -> PostgreSQL cards -> LLM selection (10 -> 5)
-Selected UUIDs -> PostgreSQL recheck -> answer or comparison
+The assistant uses a compiled LangGraph `StateGraph`. Streamlit calls
+`SearchService.handle`; graph nodes run intent parsing, filter validation,
+clarification, comparison and retrieval. SQL, vectors and model access remain
+inside the service. The current graph is:
+
+```mermaid
+flowchart TD
+    UI[Streamlit RU/EN] --> P[Parse intent and merge filters]
+    P -->|Clarify| C[Ask for clarification]
+    P -->|Compare| DB[Read PostgreSQL product rows]
+    P -->|Search| Q[Prepare semantic query]
+    Q --> R[PostgreSQL filters → E5/Qdrant → cards]
+    R -->|No SQL matches| F[Verify facts and return response]
+    R -->|SQL candidates exist| S[Local LLM selection]
+    S -->|First attempt| E[Local LLM evaluation]
+    S -->|Second attempt| F
+    E -->|Sufficient| F
+    E -->|Insufficient| W[Validate rewritten query]
+    W -->|New usable query| R
+    W -->|Rejected rewrite| F
+    DB --> F
+    C --> F
 ```
 
-The model selects validated catalog IDs; the application displays database facts.
-Comparisons read current product rows without running vector retrieval again.
-This version uses one catalog and an installed local `qwen3:1.7b` model.
-Cross-Encoders, external LLM providers, autonomous agents and sales statistics
-are deferred.
+Each message permits at most two searches, eight physical Ollama calls including
+JSON repair, and a shared 180-second processing deadline. Blocking stages are
+checked before and after execution; this is not a hard cancellation guarantee
+for a stalled database or encoder call. Retrieval failures are distinct from
+empty results. Retry candidates are deduplicated by UUID and interleaved by rank
+before the final 10-to-5 selection; scores from different queries are not averaged.
+Exact filters remain unchanged during rewriting. The original wording anchors
+rewrites; lexical checks reject added numbers, recognized conflicting constraints,
+negation changes and control characters. They do not prove semantic equivalence.
+
+The model selects allowed catalog IDs; the application displays current database
+facts. Comparisons do not run vector retrieval. Session state lives in process
+memory; requests within one session are serialized, and separate sessions remain
+independent. Restarting the app clears conversations. The collapsed **Search
+execution** panel shows nodes, timings, search queries, call counts and stop reason.
+External tracing is disabled for this workflow.
+
+This version uses one catalog and the installed local `qwen3:1.7b` model.
+Cross-Encoders, external LLM providers, autonomous business actions and sales
+statistics are deferred. LangGraph orchestration uses the
+[Graph API](https://docs.langchain.com/oss/python/langgraph/graph-api).
 
 ## Data
 
@@ -152,7 +186,7 @@ cheaper results or compare the first two results. The UI uses only catalog facts
 read from PostgreSQL. Unknown memory is shown as a dash. USD is the project
 currency; the source currency is unconfirmed and no conversion is performed.
 Model, database or Qdrant failures produce a fresh error response. Local model
-latency has no measured UI guarantee yet; each dialogue call has a 120 s deadline.
+latency has no measured UI guarantee yet; each dialogue call has a 180 s processing deadline.
 Cross Encoders, external LLM, orders and favorites are deferred.
 
 For the same 30 catalog-derived cases, compare retrieval with local selection:
@@ -166,7 +200,24 @@ latency, RSS, errors and threshold checks. Queries and report remain untracked.
 Unsupported attributes are handled as clarification by the dialogue; they have
 no relevance labels in retrieval evaluation.
 
-Local verification on November 27, 2026: 123 tests (including isolated integration
+LangGraph v0.3 checks: 156 tests including isolated PostgreSQL integration,
+Ruff, formatting, lock verification and an offline build passed. Independent
+review found and retested fixes for late deadline classification, unsafe query
+rewrites and concurrent updates within one session. Live browser checks covered
+RU/EN diagnostics, search, comparison and cheaper results.
+
+The paired 30-case dialogue run compared commit `23869c7` with the LangGraph
+workflow at `b22953e`: nDCG@5 was 0.953 in both, with zero technical errors and
+zero filter violations. Full-message p50/p95 increased from 34.6/47.3 s to
+51.4/59.0 s. The graph used at most four Ollama calls and one search in this run;
+no quality gain from retries was demonstrated. Both versions requested an
+unnecessary clarification for one positive memory query. Its clause-parsing bug
+was then fixed in `37ba845` and verified separately in tests and the live UI;
+the full paired run was not repeated after that narrow fix. The 24 positive
+cases have partial relevance labels; this is a small local check, not general
+recommendation-quality evidence. Raw cases and reports remain untracked.
+
+Earlier v0.2 verification on November 27, 2026: 123 tests (including isolated integration
 checks), Ruff, formatting, lock verification and an offline build passed. A live UI
 scenario covered text search, refinement, sidebar filters, comparison, empty and
 unsupported requests, and recovery after a Qdrant outage.

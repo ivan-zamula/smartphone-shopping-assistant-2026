@@ -30,7 +30,7 @@
 <g id="node3" class="node">
 <title>agents</title>
 <path fill="white" stroke="#64748b" d="M394.17,-424.29C394.17,-424.29 346.5,-424.29 346.5,-424.29 340.5,-424.29 334.5,-418.29 334.5,-412.29 334.5,-412.29 334.5,-400.29 334.5,-400.29 334.5,-394.29 340.5,-388.29 346.5,-388.29 346.5,-388.29 394.17,-388.29 394.17,-388.29 400.17,-388.29 406.17,-394.29 406.17,-400.29 406.17,-400.29 406.17,-412.29 406.17,-412.29 406.17,-418.29 400.17,-424.29 394.17,-424.29" />
-<text xml:space="preserve" text-anchor="middle" x="370.34" y="-402.01" font-family="DejaVu Sans" font-size="12.00">Агенты</text>
+<text xml:space="preserve" text-anchor="middle" x="370.34" y="-411" font-family="DejaVu Sans" font-size="10">LangGraph</text><text xml:space="preserve" text-anchor="middle" x="370.34" y="-397" font-family="DejaVu Sans" font-size="10">Агенты</text>
 </g>
 
 <g id="edge10" class="edge">
