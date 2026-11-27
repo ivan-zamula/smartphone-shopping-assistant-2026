@@ -200,6 +200,31 @@ def test_memory_evidence_corrects_llm_direction(query, field, expected):
         assert actual.maximum is None
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Подбери Motorola: ОЗУ 8 ГБ, накопитель 256 ГБ",
+        "Find Motorola: RAM 8 GB, storage 256 GB",
+        "Find Motorola: 8 GB RAM, 256 GB storage",
+        "Подбери Motorola: 8 ГБ ОЗУ; 256 ГБ накопитель",
+    ],
+)
+def test_memory_evidence_respects_comma_clause_boundary(query):
+    from smartphone_shopping_assistant.llm import _memory_evidence
+
+    assert _memory_evidence(query) == {
+        "ram_gb": {"minimum": 8, "maximum": 8},
+        "storage_gb": {"minimum": 256, "maximum": 256},
+    }
+
+
+def test_memory_evidence_keeps_conflicting_amounts_ambiguous():
+    from smartphone_shopping_assistant.llm import _memory_evidence
+
+    with pytest.raises(ValueError, match="ambiguous memory amounts"):
+        _memory_evidence("RAM 8 GB and 12 GB RAM")
+
+
 def test_russian_brand_and_both_memory_bounds():
     answer = json.dumps(
         {

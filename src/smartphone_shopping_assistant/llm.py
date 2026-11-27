@@ -103,6 +103,8 @@ def _memory_evidence(query: str) -> dict[str, dict[str, int | bool]]:
         before = query[max(start, match.start() - 45) : match.start()].lower()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(query)
         after = query[match.end() : min(end, match.end() + 20)].lower()
+        # Only labels before the next clause boundary belong to this amount.
+        after = re.split(r"[,;]", after, maxsplit=1)[0]
         before_ram, before_storage = bool(_RAM.search(before)), bool(_STORAGE.search(before))
         after_ram, after_storage = bool(_RAM.search(after)), bool(_STORAGE.search(after))
         next_bound = r"[<>≥≤]|\b(?:minimum|maximum|at least|at most|не менее|не более)\b"
