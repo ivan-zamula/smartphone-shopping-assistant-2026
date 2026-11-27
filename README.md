@@ -11,6 +11,13 @@ comparison are implemented. Local acceptance passed: 121 tests, the live browser
 scenarios and paired retrieval/LLM evaluation. This is a local demo; production
 deployment has not been tested.
 
+## Interface
+
+![Smartphone assistant: filters, dialogue history and catalog results](assets/streamlit-demo.png)
+
+Dialogue history and catalog results in the local Streamlit interface. Prices are
+historical; the source currency is unconfirmed.
+
 ## Architecture
 
 The diagram shows the target service architecture. The website calls the assistant,
