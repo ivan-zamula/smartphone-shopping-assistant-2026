@@ -17,10 +17,21 @@ from smartphone_shopping_assistant.search import SearchEngine
 
 def card(number, price=100):
     return ProductCard(
-        id=UUID(int=number), name=f"Synthetic {number}", brand="Test", model=str(number),
-        ram_gb=8, storage_gb=128, color="black", carrier_unlocked=True,
-        price=Decimal(price), currency="USD", currency_status="unconfirmed",
-        source_currency=None, conversion_applied=False, raw_fields={}, text="synthetic",
+        id=UUID(int=number),
+        name=f"Synthetic {number}",
+        brand="Test",
+        model=str(number),
+        ram_gb=8,
+        storage_gb=128,
+        color="black",
+        carrier_unlocked=True,
+        price=Decimal(price),
+        currency="USD",
+        currency_status="unconfirmed",
+        source_currency=None,
+        conversion_applied=False,
+        raw_fields={},
+        text="synthetic",
     )
 
 
@@ -36,11 +47,29 @@ class FakeEngine:
         self.requests.append(request)
         if self.fail:
             raise RuntimeError("database down")
-        return [SearchCandidate(product=c, vector_score=.8) for c in self.products.values()
-                if self._matches(c, request.filters)]
+        return [
+            SearchCandidate(product=c, vector_score=0.8)
+            for c in self.products.values()
+            if self._matches(c, request.filters)
+        ]
 
     def get_products(self, ids):
         return {i: self.products[i] for i in ids if i in self.products}
+
+    def known_brands(self):
+        return sorted({item.brand for item in self.products.values()})
+
+
+def test_literal_brand_survives_missing_model_patch():
+    service, engine, llm, session = setup()
+    engine.products[UUID(int=1)] = card(1).model_copy(update={"brand": "Samsung"})
+    result = service.handle("Samsung с 8 ГБ ОЗУ", session)
+    assert result.status == "ok"
+    assert result.filters.brands == ["Samsung"]
+    assert all(item.brand == "Samsung" for item in result.items)
+    llm.next_intent = ParsedIntent(intent="search", filter_changes=FilterPatch(brands=["Test"]))
+    assert service.handle("Samsung с 8 ГБ ОЗУ", session).status == "needs_clarification"
+    assert service.handle("не Samsung", session).status == "needs_clarification"
 
 
 class FakeLLM:
@@ -62,6 +91,14 @@ def setup():
     return SearchService(engine, llm), engine, llm, SessionState()
 
 
+def test_unsupported_water_protection_requires_clarification():
+    service, engine, llm, session = setup()
+    for query in ("water resistance", "waterproof", "водозащита"):
+        assert service.handle(query, session).status == "needs_clarification"
+    assert not engine.requests
+    assert llm.select_calls == 0
+
+
 def test_search_cheaper_compare_and_current_rows():
     service, engine, llm, session = setup()
     first = service.handle("phone", session)
@@ -71,7 +108,8 @@ def test_search_cheaper_compare_and_current_rows():
     assert cheaper.status == "ok"
     assert cheaper.items[0].id == UUID(int=2)
     assert engine.requests[-1].filters.price == NumericRange(
-        maximum=Decimal(100), include_maximum=False)
+        maximum=Decimal(100), include_maximum=False
+    )
     llm.next_intent = ParsedIntent(intent="compare", previous_result_positions=[1, 2])
     assert service.handle("compare first two", session).status == "needs_clarification"
     llm.next_intent = ParsedIntent(intent="search")
@@ -123,6 +161,24 @@ def test_cheaper_keeps_existing_price_minimum():
     assert engine.requests[-1].filters.price.minimum == Decimal(50)
     assert engine.requests[-1].filters.price.maximum == Decimal(100)
     assert engine.requests[-1].filters.price.include_maximum is False
+
+
+def test_pure_cheaper_ignores_model_intent_and_patch():
+    for intent in ("clarify", "compare"):
+        service, engine, llm, session = setup()
+        assert service.handle("", session, FilterPatch(price={"minimum": 50})).status == "ok"
+        llm.next_intent = ParsedIntent(intent=intent, filter_changes=FilterPatch(brands=["Other"]))
+        result = service.handle("Покажи дешевле первого", session)
+        assert result.status == "ok"
+        assert result.filters.price == NumericRange(
+            minimum=Decimal(50), maximum=Decimal(100), include_maximum=False
+        )
+        assert result.filters.brands is None
+    service, engine, llm, session = setup()
+    llm.next_intent = ParsedIntent(intent="clarify")
+    assert service.handle("cheaper", session).status == "needs_clarification"
+    session.last_successful_ids = [UUID(int=1)]
+    assert service.handle("cheaper with 16 GB RAM", session).status == "needs_clarification"
 
 
 def test_compare_timeout_after_hydration(monkeypatch):

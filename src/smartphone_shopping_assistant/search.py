@@ -1,6 +1,7 @@
 """Read-only PostgreSQL-filtered Qdrant retrieval."""
 
 import os
+import time
 from contextlib import closing
 from functools import lru_cache
 from uuid import UUID
@@ -49,6 +50,19 @@ class SearchEngine:
 
     def _connect(self):
         return psycopg.connect(**self.settings.postgres)
+
+    def known_brands(self) -> list[str]:
+        """Read current brand vocabulary from the same catalogue used for filtering."""
+        try:
+            with closing(self._connect()) as conn:
+                return [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT DISTINCT brand FROM public.products ORDER BY brand"
+                    ).fetchall()
+                ]
+        except Exception as exc:
+            raise SearchUnavailable("PostgreSQL brand lookup unavailable") from exc
 
     def _eligible(self, filters):
         clauses, params = [], []
@@ -129,9 +143,12 @@ class SearchEngine:
             filters.carrier_unlocked is None or product.carrier_unlocked == filters.carrier_unlocked
         )
 
-    def retrieve(self, request: SearchRequest, candidate_limit=20) -> list[SearchCandidate]:
+    def retrieve(
+        self, request: SearchRequest, candidate_limit=20, *, timings: dict | None = None
+    ) -> list[SearchCandidate]:
         if candidate_limit < 1:
             raise ValueError("candidate_limit must be positive")
+        started = time.perf_counter()
         try:
             ids = self._eligible(request.filters)
             eligible = set(ids)
@@ -139,8 +156,11 @@ class SearchEngine:
                 raise ValueError("Duplicate SQL product ID")
         except Exception as exc:
             raise SearchUnavailable("PostgreSQL filter stage unavailable") from exc
+        if timings is not None:
+            timings["sql_ms"] = (time.perf_counter() - started) * 1000
         if not ids:
             return []
+        started = time.perf_counter()
         try:
             encoder = self.encoder or _cached_encoder()
             vector = np.asarray(
@@ -155,6 +175,9 @@ class SearchEngine:
                 raise ValueError("Invalid query embedding")
         except Exception as exc:
             raise SearchUnavailable("Query encoder unavailable") from exc
+        if timings is not None:
+            timings["embedding_ms"] = (time.perf_counter() - started) * 1000
+        started = time.perf_counter()
         try:
             with closing(QdrantClient(url=self.settings.qdrant_url)) as client:
                 config = client.get_collection(COLLECTION).config.params.vectors
@@ -191,17 +214,23 @@ class SearchEngine:
             ordered.sort(key=lambda item: (-item[1], str(item[0])))
         except Exception as exc:
             raise SearchUnavailable("Qdrant retrieval unavailable") from exc
+        if timings is not None:
+            timings["qdrant_ms"] = (time.perf_counter() - started) * 1000
         if not ordered:
             return []
+        started = time.perf_counter()
         try:
             products = self.get_products([product_id for product_id, _ in ordered])
             if set(products) != seen:
                 raise ValueError("Missing PostgreSQL product")
             if any(not self._matches(product, request.filters) for product in products.values()):
                 raise ValueError("Hydrated product no longer matches filters")
-            return [
+            result = [
                 SearchCandidate(product=products[product_id], vector_score=score)
                 for product_id, score in ordered
             ]
+            if timings is not None:
+                timings["hydration_ms"] = (time.perf_counter() - started) * 1000
+            return result
         except Exception as exc:
             raise SearchUnavailable("PostgreSQL hydration unavailable") from exc

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from uuid import UUID, uuid4
 
 from .contracts import FilterPatch, ProductCard, SearchFilters, SearchRequest, SearchResponse
-from .llm import LocalLLM
+from .llm import LocalLLM, literal_brands
 from .search import SearchEngine
 
 
@@ -25,9 +25,16 @@ class DialogueResponse(SearchResponse):
 
 _UNSUPPORTED = re.compile(
     r"камер\w*|батаре\w*|аккумулятор\w*|процессор\w*|экран\w*|диспле\w*|"
-    r"camera|battery|cpu|processor|display|screen|конверт\w*|пересч\w*|convert", re.I
+    r"camera|battery|cpu|processor|display|screen|water\s*resistan\w*|waterproof\w*|"
+    r"водозащит\w*|водонепроница\w*|конверт\w*|пересч\w*|convert",
+    re.I,
 )
 _CHEAPER = re.compile(r"дешевле|подешевле|cheaper|less expensive", re.I)
+_PURE_CHEAPER = re.compile(
+    r"(?:покажи\s+)?(?:дешевле|подешевле)(?:\s+первого)?|"
+    r"(?:show\s+)?(?:cheaper|less expensive)(?:\s+than\s+the\s+first)?",
+    re.I,
+)
 
 
 def _merge(base: SearchFilters, patch: FilterPatch) -> SearchFilters:
@@ -56,8 +63,12 @@ class SearchService:
 
         def response(status, message, *, items=None, comparison=None, applied=None):
             return DialogueResponse(
-                request_id=request_id, status=status, filters=applied or filters,
-                items=items or [], comparison=comparison or [], message=message,
+                request_id=request_id,
+                status=status,
+                filters=applied or filters,
+                items=items or [],
+                comparison=comparison or [],
+                message=message,
             )
 
         try:
@@ -71,13 +82,22 @@ class SearchService:
             if not text and not ui_changes:
                 return response("needs_clarification", "Введите запрос или измените фильтры.")
             if text:
+                known_brands = self.engine.known_brands()
                 parsed = self.llm.parse(
                     text,
-                    {"filters": filters.model_dump(mode="json"),
-                     "previous_result_count": len(session.last_successful_ids)},
+                    {
+                        "filters": filters.model_dump(mode="json"),
+                        "previous_result_count": len(session.last_successful_ids),
+                        "known_brands": known_brands[:100],
+                    },
                     deadline=deadline,
                 )
                 check_deadline()
+                pure_cheaper = bool(_PURE_CHEAPER.fullmatch(text))
+                if pure_cheaper and session.last_successful_ids:
+                    parsed = parsed.model_copy(
+                        update={"intent": "refine", "filter_changes": FilterPatch()}
+                    )
                 if parsed.intent == "clarify":
                     return response("needs_clarification", "Уточните условия поиска.")
                 if parsed.intent == "compare":
@@ -96,6 +116,18 @@ class SearchService:
                     cards = [products[i] for i in ids]
                     return response("ok", "Сравнение по текущим данным каталога.", comparison=cards)
                 text_patch = parsed.filter_changes
+                explicit, ambiguous = literal_brands(text, known_brands)
+                if ambiguous:
+                    return response("needs_clarification", "Уточните условие по бренду.")
+                if explicit:
+                    proposed = (
+                        text_patch.brands if "brands" in text_patch.model_fields_set else None
+                    )
+                    if proposed is not None and {b.casefold() for b in proposed} != {
+                        b.casefold() for b in explicit
+                    }:
+                        return response("needs_clarification", "Уточните условие по бренду.")
+                    text_patch = text_patch.model_copy(update={"brands": explicit})
             else:
                 parsed = None
                 text_patch = FilterPatch()
@@ -128,11 +160,17 @@ class SearchService:
                 else:
                     ceiling = first.price
                     inclusive = False
-                merged = _merge(merged, FilterPatch(price={
-                    "minimum": old_price.minimum if old_price else None,
-                    "include_minimum": old_price.include_minimum if old_price else True,
-                    "maximum": ceiling, "include_maximum": inclusive,
-                }))
+                merged = _merge(
+                    merged,
+                    FilterPatch(
+                        price={
+                            "minimum": old_price.minimum if old_price else None,
+                            "include_minimum": old_price.include_minimum if old_price else True,
+                            "maximum": ceiling,
+                            "include_maximum": inclusive,
+                        }
+                    ),
+                )
             if text and not _CHEAPER.search(text):
                 query = text
             else:
@@ -163,8 +201,10 @@ class SearchService:
             session.filters, session.semantic_query = merged, query
             session.last_successful_ids = ids.copy()
             return response(
-                "ok", "Товары из каталога; валюта источника не подтверждена, пересчёта нет.",
-                items=cards, applied=merged,
+                "ok",
+                "Товары из каталога; валюта источника не подтверждена, пересчёта нет.",
+                items=cards,
+                applied=merged,
             )
         except Exception:
             return response("error", "Поиск сейчас недоступен. Повторите запрос позже.")

@@ -9,11 +9,12 @@ from typing import Literal
 from uuid import UUID
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .contracts import ParsedIntent, SearchCandidate
 
 MODEL = "qwen3:1.7b"
+SELECTION_NUM_CTX = 4096
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 REASON_CODES = ("price", "brand", "memory", "unlocked", "semantic_match")
 _AMOUNT = re.compile(r"(?<![\w.])(?P<value>\d+)\s*(?P<unit>gb|гб)?\b", re.I)
@@ -22,13 +23,70 @@ _STORAGE = re.compile(
     r"\bstorage\b|\brom\b|накопител\w*|хранилищ\w*|встроенн\w*\s+памят\w*|памят\w*",
     re.I,
 )
-_CYRILLIC = str.maketrans({
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
-    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
-    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
-    "ф": "f", "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch",
-    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
-})
+_CYRILLIC = str.maketrans(
+    {
+        "а": "a",
+        "б": "b",
+        "в": "v",
+        "г": "g",
+        "д": "d",
+        "е": "e",
+        "ё": "e",
+        "ж": "zh",
+        "з": "z",
+        "и": "i",
+        "й": "y",
+        "к": "k",
+        "л": "l",
+        "м": "m",
+        "н": "n",
+        "о": "o",
+        "п": "p",
+        "р": "r",
+        "с": "s",
+        "т": "t",
+        "у": "u",
+        "ф": "f",
+        "х": "kh",
+        "ц": "ts",
+        "ч": "ch",
+        "ш": "sh",
+        "щ": "shch",
+        "ъ": "",
+        "ы": "y",
+        "ь": "",
+        "э": "e",
+        "ю": "yu",
+        "я": "ya",
+    }
+)
+
+
+def literal_brands(query: str, known_brands: list[str]) -> tuple[list[str], bool]:
+    """Return explicit catalogue brands and whether exclusion/combination is ambiguous."""
+    original = query.casefold()
+    transliterated = original.translate(_CYRILLIC)
+    found = []
+    for brand in known_brands:
+        pattern = r"(?<!\w)" + re.escape(brand.casefold()) + r"(?!\w)"
+        hits = list(re.finditer(pattern, original)) + list(re.finditer(pattern, transliterated))
+        if hits:
+            found.append((min(hit.start() for hit in hits), brand))
+    found.sort(key=lambda item: item[0])
+    if not found:
+        return [], False
+    # Exclusions cannot be expressed by SearchFilters.brands.
+    if re.search(
+        r"\b(?:не|без|кроме|исключая|not|except|without)\s+\w*\s*$", original[: found[0][0]]
+    ):
+        return [], True
+    if len(found) > 1:
+        between = original[found[0][0] : found[-1][0]]
+        if re.search(r"\b(?:не|без|кроме|исключая|not|except|without)\b", between):
+            return [], True
+        if not re.search(r"\b(?:или|or)\b", between):
+            return [], True
+    return [brand for _, brand in found], False
 
 
 def _memory_evidence(query: str) -> dict[str, dict[str, int | bool]]:
@@ -40,9 +98,9 @@ def _memory_evidence(query: str) -> dict[str, dict[str, int | bool]]:
         if not 0 < value <= 2_147_483_647:
             continue
         start = matches[index - 1].end() if index else 0
-        before = query[max(start, match.start() - 45):match.start()].lower()
+        before = query[max(start, match.start() - 45) : match.start()].lower()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(query)
-        after = query[match.end():min(end, match.end() + 20)].lower()
+        after = query[match.end() : min(end, match.end() + 20)].lower()
         before_ram, before_storage = bool(_RAM.search(before)), bool(_STORAGE.search(before))
         after_ram, after_storage = bool(_RAM.search(after)), bool(_STORAGE.search(after))
         next_bound = r"[<>≥≤]|\b(?:minimum|maximum|at least|at most|не менее|не более)\b"
@@ -92,9 +150,15 @@ class Selection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     selected_ids: list[UUID] = Field(default_factory=list, max_length=5)
     abstain: bool
-    reason_codes: list[Literal["price", "brand", "memory", "unlocked", "semantic_match"]] = (
-        Field(default_factory=list)
+    reason_codes: list[Literal["price", "brand", "memory", "unlocked", "semantic_match"]] = Field(
+        default_factory=list
     )
+
+    @field_validator("reason_codes")
+    @classmethod
+    def unique_reason_codes(cls, value: list[str]) -> list[str]:
+        """Normalize validated explanation tags without changing selected products."""
+        return list(dict.fromkeys(value))
 
     @model_validator(mode="after")
     def coherent(self):
@@ -102,8 +166,6 @@ class Selection(BaseModel):
             raise ValueError("duplicate selected ID")
         if self.abstain != (not self.selected_ids):
             raise ValueError("abstain must match empty selection")
-        if len(set(self.reason_codes)) != len(self.reason_codes):
-            raise ValueError("duplicate reason code")
         return self
 
 
@@ -119,7 +181,9 @@ class LocalLLM:
         self.model = model
         self.client = client or httpx.Client(trust_env=False)
 
-    def _chat(self, system: str, data: dict, schema: dict, deadline: float | None) -> dict:
+    def _chat(
+        self, system: str, data: dict, schema: dict, deadline: float | None, num_ctx: int = 2048
+    ) -> dict:
         cutoff = deadline if deadline is not None else time.monotonic() + 120
         remaining = cutoff - time.monotonic()
         if remaining <= 0:
@@ -132,7 +196,7 @@ class LocalLLM:
                     "stream": False,
                     "think": False,
                     "format": schema,
-                    "options": {"temperature": 0, "num_ctx": 2048, "num_predict": 384},
+                    "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": 384},
                     "messages": [
                         {"role": "system", "content": system},
                         {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
@@ -194,7 +258,8 @@ class LocalLLM:
                 changes = answer.get("filter_changes", {})
                 if isinstance(changes, dict):
                     answer["filter_changes"] = {
-                        key: value for key, value in changes.items()
+                        key: value
+                        for key, value in changes.items()
                         if value is not None or key in clear_fields
                     }
                     for field in clear_fields:
@@ -219,7 +284,8 @@ class LocalLLM:
                             changes.pop(field)
                     brands = changes.get("brands")
                     if isinstance(brands, list) and any(
-                        not isinstance(brand, str) or (
+                        not isinstance(brand, str)
+                        or (
                             not re.search(
                                 r"(?<!\w)" + re.escape(brand.casefold()) + r"(?!\w)",
                                 query_lower,
@@ -233,8 +299,13 @@ class LocalLLM:
                     ):
                         changes.pop("brands", None)
                         answer["intent"] = "clarify"
-                    if "price" in changes and "price" not in clear_fields and not re.search(
-                        r"\d", query_lower
+                    if (
+                        "price" in changes
+                        and "price" not in clear_fields
+                        and not re.search(
+                            r"цен\w*|стоим\w*|бюджет\w*|руб\w*|доллар\w*|\bprice\b|\bcost\b|\bbudget\b|[$€₽]",
+                            query_lower,
+                        )
                     ):
                         changes.pop("price", None)
                     if not re.search(r"разблок|без\s+привяз|unlocked|carrier", query_lower):
@@ -265,13 +336,13 @@ class LocalLLM:
         if not candidates:
             return Selection(selected_ids=[], abstain=True, reason_codes=[])
         deadline = deadline if deadline is not None else time.monotonic() + 120
-        allowed = {c.product.id for c in candidates}
+        by_position = {position: c.product.id for position, c in enumerate(candidates, 1)}
         data = {
             "query": query,
             "limit": limit,
             "candidates": [
                 {
-                    "id": str(c.product.id),
+                    "position": position,
                     "name": c.product.name,
                     "brand": c.product.brand,
                     "model": c.product.model,
@@ -280,27 +351,59 @@ class LocalLLM:
                     "storage_gb": c.product.storage_gb,
                     "carrier_unlocked": c.product.carrier_unlocked,
                 }
-                for c in candidates
+                for position, c in enumerate(candidates, 1)
             ],
         }
         system = (
-            "Choose at most limit smartphone IDs from candidates only, ordered by relevance. "
-            "Return selected_ids, abstain, and reason_codes. Set abstain=false whenever "
-            "selected_ids is nonempty; set abstain=true only when selected_ids is empty. "
+            "Choose at most limit smartphone positions from candidates only, ordered by relevance. "
+            "Return selected_positions and reason_codes. Empty selection is allowed. "
             "Allowed reason codes: "
             + ", ".join(REASON_CODES)
-            + ". No free-text reasons or invented facts. Empty selection is allowed."
+            + ". No free-text reasons or invented facts."
         )
+        schema = {
+            "type": "object",
+            "properties": {
+                "selected_positions": {
+                    "type": "array",
+                    "items": {"type": "integer", "enum": list(by_position)},
+                    "maxItems": limit,
+                },
+                "reason_codes": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(REASON_CODES)},
+                },
+            },
+            "required": ["selected_positions", "reason_codes"],
+            "additionalProperties": False,
+        }
         for attempt in range(2):
             try:
-                answer = self._chat(system, data, Selection.model_json_schema(), deadline)
-                result = Selection.model_validate(answer)
-                if len(result.selected_ids) > limit or any(
-                    i not in allowed for i in result.selected_ids
+                answer = self._chat(system, data, schema, deadline, num_ctx=SELECTION_NUM_CTX)
+                if not isinstance(answer, dict) or set(answer) != {
+                    "selected_positions",
+                    "reason_codes",
+                }:
+                    raise ValueError("invalid selection fields")
+                positions = answer["selected_positions"]
+                if (
+                    not isinstance(positions, list)
+                    or len(positions) > limit
+                    or any(type(pos) is not int or pos not in by_position for pos in positions)
+                    or len(set(positions)) != len(positions)
                 ):
-                    raise ValueError("selection outside allowlist or limit")
+                    raise ValueError("invalid or duplicate selection position")
+                result = Selection.model_validate(
+                    {
+                        "selected_ids": [by_position[pos] for pos in positions],
+                        "abstain": not positions,
+                        "reason_codes": answer["reason_codes"],
+                    }
+                )
                 return result
             except (ValidationError, ValueError) as exc:
                 if attempt:
                     raise LLMUnavailable("Invalid local LLM selection") from exc
+                data["validation_feedback"] = str(exc)[:600]
+                system += " Correct the previous invalid response using validation_feedback."
         raise LLMUnavailable("Invalid local LLM selection")

@@ -13,9 +13,26 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
+
 from .contracts import SearchFilters, SearchRequest
 from .ingest import COLLECTION, MODEL, REVISION
+from .llm import MODEL as LLM_MODEL
+from .llm import SELECTION_NUM_CTX, LocalLLM
 from .search import SearchEngine
+
+
+def ollama_revision() -> str | None:
+    """Return local model digest when Ollama exposes one."""
+    try:
+        response = httpx.get("http://127.0.0.1:11434/api/tags", timeout=2, trust_env=False)
+        response.raise_for_status()
+        for model in response.json().get("models", []):
+            if model.get("name") == LLM_MODEL:
+                return model.get("digest") or None
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        pass
+    return None
 
 
 @dataclass(frozen=True)
@@ -88,15 +105,50 @@ def build_cases(cards: list[dict]) -> list[Judgment]:
             )
         )
     for i, card in enumerate(selected[:8], 1):
+        brand, model = card["brand"], card["model"]
+        ram, storage = card["ram_gb"], card["storage_gb"]
+        variants = (
+            (f"Ищу {brand} {model}, какие варианты есть?", ("brand", "model")),
+            (f"Покажи телефоны {brand} с {ram} ГБ ОЗУ", ("brand", "ram_gb")),
+            (f"Есть смартфоны {brand} на {storage} ГБ памяти?", ("brand", "storage_gb")),
+            (
+                f"Подбери {brand}: ОЗУ {ram} ГБ, накопитель {storage} ГБ",
+                ("brand", "ram_gb", "storage_gb"),
+            ),
+            (f"Нужен {brand} {model} с {ram} ГБ оперативной памяти", ("brand", "model", "ram_gb")),
+            (
+                f"Какие {brand} {model} имеют {storage} ГБ встроенной памяти?",
+                ("brand", "model", "storage_gb"),
+            ),
+            (
+                f"Найди {brand} с памятью {storage} ГБ и ОЗУ {ram} ГБ",
+                ("brand", "storage_gb", "ram_gb"),
+            ),
+            (f"Покажи модель {model} бренда {brand}", ("brand", "model")),
+        )
+        query, fields = variants[i - 1]
+        matching = [
+            x
+            for x in cards
+            if all(
+                x[field].casefold() == card[field].casefold()
+                if field in ("brand", "model")
+                else x[field] == card[field]
+                for field in fields
+            )
+        ]
         cases.append(
             Judgment(
                 f"P{i:02}",
                 "paraphrase",
-                f"Show me {card['name']}",
+                query,
                 {},
-                {card["id"]: 2},
-                "Paraphrase retains the complete catalog name.",
-                f"catalog.name={card['name']!r}; catalog.id={card['id']}",
+                {x["id"]: 1 for x in matching},
+                (
+                    "All source rows matching the stated exact fields are relevant; "
+                    "no unspoken preference or unique target is assumed."
+                ),
+                f"catalog {', '.join(fields)}; {len(matching)} matching UUIDs",
             )
         )
     for i, attribute in enumerate(("camera megapixels", "battery capacity", "water resistance"), 1):
@@ -139,7 +191,12 @@ def build_cases(cards: list[dict]) -> list[Judgment]:
 
 
 def score_ranking(
-    grades: dict[str, int], ranked: list[str], *, positive: bool, k: int = 5, n: int = 20,
+    grades: dict[str, int],
+    ranked: list[str],
+    *,
+    positive: bool,
+    k: int = 5,
+    n: int = 20,
     expected_empty: bool = False,
 ) -> dict:
     """Metrics with explicit unjudged coverage; unknown IDs never become negatives."""
@@ -186,6 +243,8 @@ def evaluate(
     catalog_ids: set[str],
     engine: SearchEngine,
     ranker: Callable[[SearchRequest, list], list] | None = None,
+    progress: Callable[[dict], None] | None = None,
+    collect_timings: bool = False,
 ) -> tuple[list[dict], dict]:
     """A later LLM ranker may reorder/subselect retrieved candidates, never add IDs."""
     rows = []
@@ -194,10 +253,17 @@ def evaluate(
             query=case.query, filters=SearchFilters.model_validate(case.filters)
         )
         start = time.perf_counter()
+        stages = {}
         try:
-            candidates = engine.retrieve(request, candidate_limit=20)
+            candidates = (
+                engine.retrieve(request, candidate_limit=20, timings=stages)
+                if collect_timings
+                else engine.retrieve(request, candidate_limit=20)
+            )
             retrieval_ms = (time.perf_counter() - start) * 1000
+            llm_start = time.perf_counter()
             chosen = ranker(request, candidates) if ranker else candidates
+            llm_ms = (time.perf_counter() - llm_start) * 1000 if ranker else None
             ids = [str(item.product.id) for item in chosen]
             retrieved_ids = [str(item.product.id) for item in candidates]
             allowed = {str(item.product.id) for item in candidates}
@@ -210,7 +276,9 @@ def evaluate(
             ]
             duplicates = len(ids) - len(set(ids))
             metrics = score_ranking(
-                case.grades, ids, positive=bool(case.grades),
+                case.grades,
+                ids,
+                positive=bool(case.grades),
                 expected_empty=case.category == "impossible",
             )
             retrieval_recall = score_ranking(
@@ -223,6 +291,8 @@ def evaluate(
                     "ids": ids,
                     "retrieval_recall": retrieval_recall,
                     "retrieval_ms": retrieval_ms,
+                    **stages,
+                    "llm_ms": llm_ms,
                     "total_ms": (time.perf_counter() - start) * 1000,
                     "violations": len(violations) + duplicates,
                     "error": None,
@@ -236,10 +306,14 @@ def evaluate(
                     "category": case.category,
                     "error": f"{type(exc).__name__}: {exc}",
                     "retrieval_ms": (time.perf_counter() - start) * 1000,
+                    **stages,
+                    "llm_ms": None,
                     "total_ms": (time.perf_counter() - start) * 1000,
                     "violations": 0,
                 }
             )
+        if progress is not None:
+            progress(rows[-1])
     valid = [r for r in rows if not r["error"]]
     summary = {
         "cases": len(rows),
@@ -260,9 +334,17 @@ def evaluate(
         name = "selected_recall" if key == "recall" else key
         summary[name] = statistics.mean(vals) if vals else None
         summary[name + "_denominator"] = len(vals)
-    for field in ("retrieval_ms", "total_ms"):
-        summary[field + "_cold"] = rows[0][field] if rows else None
-        warm = [r[field] for r in rows[1:]]
+    for field in (
+        "retrieval_ms",
+        "total_ms",
+        "sql_ms",
+        "embedding_ms",
+        "qdrant_ms",
+        "hydration_ms",
+        "llm_ms",
+    ):
+        summary[field + "_cold"] = rows[0].get(field) if rows else None
+        warm = [r[field] for r in rows[1:] if r.get(field) is not None]
         summary[field + "_warm_p50"] = percentile(warm, 50)
         summary[field + "_warm_p95"] = percentile(warm, 95)
     summary["rss_peak_kib"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -273,6 +355,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog", type=Path, default=Path("var/prepared/catalog.json"))
     parser.add_argument("--output-dir", type=Path, default=Path("var/evaluation"))
+    parser.add_argument("--llm", action="store_true", help="Compare baseline and local selection")
     args = parser.parse_args()
     raw = args.catalog.read_bytes()
     cards = json.loads(raw)
@@ -283,9 +366,50 @@ def main() -> None:
     (args.output_dir / "queries.json").write_text(
         json.dumps(dataset, ensure_ascii=False, indent=2) + "\n"
     )
-    rows, summary = evaluate(cases, {card["id"] for card in cards}, SearchEngine())
+    engine = SearchEngine()
+    catalog_ids = {card["id"] for card in cards}
+
+    def progress(row):
+        print(
+            f"{row['id']} {'ERROR' if row['error'] else 'OK'} {row['total_ms']:.0f}ms", flush=True
+        )
+
+    rows, summary = evaluate(
+        cases, catalog_ids, engine, progress=progress if args.llm else None, collect_timings=True
+    )
+    llm_rows = llm_summary = None
+    if args.llm:
+        local_llm = LocalLLM()
+        llm_revision = ollama_revision()
+
+        def select(request, candidates):
+            if not candidates:
+                return []
+            pool = candidates[:10]
+            choice = local_llm.select(request.query, pool, limit=5, deadline=time.monotonic() + 120)
+            by_id = {item.product.id: item for item in pool}
+            return [by_id[item_id] for item_id in choice.selected_ids]
+
+        llm_rows, llm_summary = evaluate(
+            cases, catalog_ids, engine, ranker=select, progress=progress, collect_timings=True
+        )
+    threshold = (
+        llm_summary is not None
+        and llm_summary["errors"] == 0
+        and llm_summary["violations"] == 0
+        and llm_summary["ndcg"] is not None
+        and llm_summary["ndcg"] >= 0.8
+    )
+    no_regression = (
+        llm_summary is not None
+        and llm_summary["errors"] == 0
+        and llm_summary["violations"] == 0
+        and llm_summary["ndcg"] is not None
+        and summary["ndcg"] is not None
+        and llm_summary["ndcg"] >= summary["ndcg"]
+    )
     lines = [
-        "# Local retrieval baseline",
+        "# Local retrieval evaluation" + (" and LLM selection" if args.llm else " baseline"),
         "",
         f"Catalog SHA-256: `{catalog_hash}`; cases: {len(cases)}.",
         (
@@ -298,6 +422,28 @@ def main() -> None:
         "```json",
         json.dumps(summary, indent=2),
         "```",
+        *(
+            [
+                "",
+                "## Local LLM selection",
+                "",
+                "```json",
+                json.dumps(llm_summary, indent=2),
+                "```",
+                "",
+                f"Model: `{LLM_MODEL}`; temperature=0, selection_num_ctx={SELECTION_NUM_CTX}, "
+                "num_predict=384; "
+                "C<=10, K<=5; selected_positions map to candidate UUIDs in code. "
+                f"Ollama model digest: `{llm_revision or 'unavailable'}`. "
+                "Same 30 source-derived labels and queries as baseline.",
+                f"nDCG@5 >= 0.8: {'PASS' if threshold else 'FAIL'}; "
+                f"no nDCG regression: {'PASS' if no_regression else 'FAIL'}.",
+                "Unsupported attributes are unjudged here; dialogue handles clarification. "
+                "Per-stage SQL/embedding/Qdrant/hydration/LLM timings are in aggregate JSON.",
+            ]
+            if args.llm
+            else []
+        ),
         "",
         (
             "Precision uses only judged results as denominator; unjudged hits are reported. "
@@ -306,8 +452,7 @@ def main() -> None:
             "positives only. Duplicate IDs contribute once to metrics and count as violations. "
             "Exact labels do not assert "
             "other products are negative. Unsupported attributes have no relevance labels. Cold is "
-            "first request; warm p50/p95 use remaining requests. Stage timings beyond retrieval "
-            "unavailable from SearchEngine."
+            "first request; warm p50/p95 use remaining available measurements."
         ),
         "",
         "## Cases",
@@ -340,14 +485,44 @@ def main() -> None:
             f"{row['total_ms']:.1f}",
         ]
         lines.append("| " + " | ".join(cells) + " |")
+    if llm_rows is not None:
+        lines.extend(
+            [
+                "",
+                "## Local selection cases",
+                "",
+                "| ID | Category | Selected Recall@20 | nDCG@5 | Error | ms |",
+                "|---|---|---:|---:|---|---:|",
+            ]
+        )
+        for row in llm_rows:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        row["id"],
+                        row["category"],
+                        metric(row, "recall"),
+                        metric(row, "ndcg"),
+                        row["error"] or "—",
+                        f"{row['total_ms']:.1f}",
+                    ]
+                )
+                + " |"
+            )
     lines += [
         "",
         "## Scope",
         "",
         (
-            "Retrieval baseline only. LLM ranking, dialogue, UI, unsupported-attribute handling, "
-            "and A07/A11 end-to-end acceptance: NOT RUN. Per-stage SQL/embedding/Qdrant "
-            "timings: NOT AVAILABLE. RSS is peak process RSS in KiB on Linux. "
+            (
+                "Retrieval and local selection measured. "
+                if args.llm
+                else "Retrieval baseline only. LLM ranking not run. "
+            )
+            + "Dialogue, UI, unsupported-attribute handling, "
+            "and A07/A11 end-to-end acceptance: NOT RUN. Per-stage timings are measured "
+            "where the stage executes. RSS is peak process RSS in KiB on Linux. "
             "Query labels and report are local; no user-facing claim "
             "follows from this small, partly judged set."
         ),

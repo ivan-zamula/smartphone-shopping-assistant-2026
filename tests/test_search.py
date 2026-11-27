@@ -144,3 +144,20 @@ def test_sql_filter_parameterization_and_boundaries(monkeypatch):
     assert "price > %s" in query and "ram_gb < %s" in query
     assert "LIMIT" not in query and "carrier_unlocked = %s" in query
     assert params[1:] == [Decimal("100"), 8, False]
+
+
+def test_known_brands_reads_current_catalogue(monkeypatch):
+    calls = []
+
+    class Conn:
+        def execute(self, query):
+            calls.append(query)
+            return SimpleNamespace(fetchall=lambda: [("OPPO",), ("Samsung",)])
+
+        def close(self):
+            pass
+
+    e = search.SearchEngine(settings=SimpleNamespace(postgres={}, qdrant_url=""))
+    monkeypatch.setattr(e, "_connect", Conn)
+    assert e.known_brands() == ["OPPO", "Samsung"]
+    assert calls == ["SELECT DISTINCT brand FROM public.products ORDER BY brand"]

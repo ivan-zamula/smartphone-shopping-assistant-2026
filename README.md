@@ -2,13 +2,14 @@
 
 [English](README.md) | [Русский](README.ru.md)
 
-A planned chatbot for a smartphone store, helping customers search the catalog
-and choose phones using retrieved records. The first interface will use Streamlit.
+A local smartphone catalog assistant with a Streamlit chat interface. It combines
+PostgreSQL filters, E5/Qdrant retrieval and selection by an installed Ollama model.
 
 **Current status:** all 1,816 catalog records are loaded into PostgreSQL and Qdrant
-with matching UUIDs and normalized embeddings. Stored values, vectors and technical
-vector search have been checked locally. The web interface, user-facing retrieval
-and answer generation are not implemented yet.
+with matching UUIDs. Text and sidebar filters, dialogue refinement and product
+comparison are implemented. Local acceptance passed: 121 tests, the live browser
+scenarios and paired retrieval/LLM evaluation. This is a local demo; production
+deployment has not been tested.
 
 ## Architecture
 
@@ -19,9 +20,9 @@ or external LLMs. Blue dashed arrows show agent calls to the order and account A
 
 ![Target service architecture](assets/architecture.svg)
 
-The service layer and application integrations are planned. PostgreSQL and Qdrant run locally;
-the implementation covers catalog preparation, full-catalog ingestion and a local embedding benchmark;
-the first version focuses on RAG search, with agents deferred.
+The diagram describes future service boundaries. The current local application
+implements catalog preparation, ingestion, filtered retrieval and dialogue.
+Order/account integrations and autonomous agents are deferred.
 
 ### Current implementation
 
@@ -67,19 +68,19 @@ For normalized vectors, the dot product gives cosine similarity. The benchmark
 keeps its sample vectors in process memory; the separate ingestion command below
 stores full-catalog vectors in Qdrant. Model files remain in the Hugging Face cache.
 
-### Next stage
-
-The planned application flow is:
+### Current application flow
 
 ```text
-Streamlit -> PostgreSQL filters -> candidate UUIDs
-Query embedding + candidate UUIDs -> Qdrant -> PostgreSQL product cards -> LLM -> answer
+Streamlit -> local intent parsing + filter merge -> PostgreSQL candidate UUIDs
+E5 query + UUIDs -> Qdrant (20) -> PostgreSQL cards -> LLM selection (10 -> 5)
+Selected UUIDs -> PostgreSQL recheck -> answer or comparison
 ```
 
-The full catalog is loaded into both databases. User-facing filtered retrieval
-is the next stage; numeric constraints will use PostgreSQL. The answer-generation
-model still needs to be selected. This version covers one catalog;
-an agent, historical sales and aggregate statistics are outside its scope.
+The model selects validated catalog IDs; the application displays database facts.
+Comparisons read current product rows without running vector retrieval again.
+This version uses one catalog and an installed local `qwen3:1.7b` model.
+Cross-Encoders, external LLM providers, autonomous agents and sales statistics
+are deferred.
 
 ## Data
 
@@ -114,8 +115,8 @@ missing memory values as unknown. Prices describe the source dataset, not curren
 | Code checks | Ruff | Configured and checked |
 | Relational database | PostgreSQL 18.7 | Running locally; SQL access and persistence verified |
 | Vector database | Qdrant 1.20.2 | Running locally; API, search and persistence verified |
-| Web interface | Streamlit | Planned |
-| Answer generation | LLM | Planned; model not selected |
+| Web interface | Streamlit | Local browser scenarios verified |
+| Final selection | Local Ollama qwen3:1.7b | Local evaluation passed; see the limits below |
 
 ## Run
 
@@ -125,6 +126,48 @@ The benchmark was checked on Linux with Python 3.12. Install
 ```bash
 uv sync --locked --dev
 ```
+
+### Local shopping assistant
+
+After ingesting the local catalog into PostgreSQL and Qdrant, run the already
+installed Ollama model `qwen3:1.7b` locally (no model download is part of this
+project setup), then start the UI:
+
+```bash
+uv run --locked streamlit run app.py --server.address 127.0.0.1 --server.port 8501
+```
+
+Open http://127.0.0.1:8501. Search and refine in chat; apply explicit brand,
+price, RAM, storage and unlocked filters in the sidebar. The buttons can request
+cheaper results or compare the first two results. The UI uses only catalog facts
+read from PostgreSQL. Unknown memory is shown as a dash. USD is the project
+currency; the source currency is unconfirmed and no conversion is performed.
+Model, database or Qdrant failures produce a fresh error response. Local model
+latency has no measured UI guarantee yet; each dialogue call has a 120 s deadline.
+Cross Encoders, external LLM, orders and favorites are deferred.
+
+For the same 30 catalog-derived cases, compare retrieval with local selection:
+
+```bash
+uv run --locked python -m smartphone_shopping_assistant.evaluation --llm
+```
+
+The local `var/evaluation/report.md` contains both modes, model/options, cold/warm
+latency, RSS, errors and threshold checks. Queries and report remain untracked.
+Unsupported attributes are handled as clarification by the dialogue; they have
+no relevance labels in retrieval evaluation.
+
+Local verification on November 27, 2026: 121 tests (including isolated integration
+checks), Ruff, formatting, lock verification and an offline build passed. A live UI
+scenario covered text search, refinement, sidebar filters, comparison, empty and
+unsupported requests, and recovery after a Qdrant outage.
+
+The paired evaluation ran 30 cases (29 distinct query strings), with zero errors,
+filter violations or false empty results. On 24 positive labeled cases, nDCG@5
+was 0.928 for retrieval and 0.958 after local LLM selection. Warm retrieval-plus-
+selection latency was p50 15.8 s / p95 23.3 s; UI intent parsing is additional.
+The sample is small and partially judged, so these results do not establish general
+recommendation quality. Raw cases, model responses and reports remain local.
 
 ### Local PostgreSQL
 
@@ -153,7 +196,7 @@ See the [official image documentation](https://github.com/docker-library/docs/bl
 Local verification passed: the container is healthy, SQL access works over TCP
 with password authentication, and a probe record survived container recreation.
 The infrastructure probe schema was removed afterward. Catalog ingestion creates
-`public.products`; user-facing application database access is still planned.
+`public.products`; the application reads it for exact filters and current product facts.
 
 ### Local Qdrant
 
@@ -282,6 +325,11 @@ revision, source checksum, timings and top-five results.
 | [tests/test_ingest.py](tests/test_ingest.py) | Synthetic validation and collection compatibility checks |
 | [tests/test_ingest_integration.py](tests/test_ingest_integration.py) | Opt-in PostgreSQL rollback, interrupted upload and rerun checks |
 | [tests/test_prepare.py](tests/test_prepare.py) | Validation, identity stability and repeatability tests |
+| [app.py](app.py) | Streamlit chat, filters, product cards and comparison |
+| [src/smartphone_shopping_assistant/dialogue.py](src/smartphone_shopping_assistant/dialogue.py) | Session state, refinement and comparison service |
+| [src/smartphone_shopping_assistant/search.py](src/smartphone_shopping_assistant/search.py) | PostgreSQL-filtered Qdrant retrieval |
+| [src/smartphone_shopping_assistant/llm.py](src/smartphone_shopping_assistant/llm.py) | Bounded local intent parsing and candidate selection |
+| [src/smartphone_shopping_assistant/evaluation.py](src/smartphone_shopping_assistant/evaluation.py) | Paired local evaluation and metrics |
 | [pyproject.toml](pyproject.toml) | Dependencies and code-check configuration |
 | [uv.lock](uv.lock) | Locked dependency versions |
 | `var/raw/` | Downloaded source CSV; excluded from Git |
@@ -289,8 +337,8 @@ revision, source checksum, timings and top-five results.
 | `var/prepared/` | Prepared catalog.json; excluded from Git |
 
 ```bash
-uv run --locked ruff check scripts src tests
-uv run --locked ruff format --check scripts src tests
+uv run --locked ruff check app.py scripts src tests
+uv run --locked ruff format --check app.py scripts src tests
 uv lock --check
 uv run --locked pytest -q
 ```
