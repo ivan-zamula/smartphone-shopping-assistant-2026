@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from streamlit.testing.v1 import AppTest
 
-from smartphone_shopping_assistant.contracts import SearchFilters
+from smartphone_shopping_assistant.contracts import ProductCard, SearchFilters
 from smartphone_shopping_assistant.dialogue import DialogueResponse
 
 
@@ -140,3 +140,95 @@ def test_previous_cards_are_collapsed_after_new_error():
         assert len(app.expander) == 1
         assert "История диалога" in app.expander[0].label
         assert app.expander[0].proto.expanded is False
+
+
+def test_english_locale_translates_errors_and_preserves_filter_values():
+    calls = []
+
+    def handle(self, text, session, ui_changes=None):
+        calls.append(ui_changes)
+        return _response(message="Поиск сейчас недоступен. Повторите запрос позже.")
+
+    with patch("smartphone_shopping_assistant.dialogue.SearchService.handle", handle):
+        app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py")
+        app.query_params["lang"] = "en"
+        app.run()
+        assert not app.exception
+        assert app.title[0].value == "📱 Smartphone shopping assistant"
+        assert "source currency is unconfirmed" in app.info[0].value
+        app.text_input(key="ui_brands").set_value("Samsung")
+        app.selectbox(key="ui_unlocked").set_value("Да")
+        app.button(key="FormSubmitter:filters-Apply filters").click().run()
+        assert calls[-1].brands == ["Samsung"]
+        assert calls[-1].carrier_unlocked is True
+        assert app.error[0].value == "Search is currently unavailable. Please try again later."
+
+        dialogue = app.session_state.dialogue
+        app.selectbox(key="ui_language").set_value("ru").run()
+        assert app.session_state.dialogue is dialogue
+        assert app.text_input(key="ui_brands").value == "Samsung"
+        assert app.selectbox(key="ui_unlocked").value == "Да"
+        assert len(calls) == 1  # Changing the language does not repeat a search.
+        assert app.title[0].value == "📱 Подбор смартфона"
+
+
+def test_english_cards_and_comparison_preserve_catalog_facts():
+    card = ProductCard.model_validate(
+        {
+            "id": str(uuid4()),
+            "name": "Synthetic Negro Libre",
+            "brand": "Acme",
+            "model": "S",
+            "price": "100.25",
+            "currency": "USD",
+            "currency_status": "unconfirmed",
+            "source_currency": None,
+            "conversion_applied": False,
+            "raw_fields": {},
+            "text": "synthetic",
+            "carrier_unlocked": False,
+            "ram_gb": None,
+            "storage_gb": 128,
+            "color": "Negro",
+        }
+    )
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py")
+    app.query_params["lang"] = "en"
+    app.run()
+    app.session_state.history = [
+        (
+            "Show Acme phones",
+            DialogueResponse(
+                request_id=uuid4(),
+                status="ok",
+                items=[card],
+                message="Товары из каталога; валюта источника не подтверждена, пересчёта нет.",
+            ),
+        )
+    ]
+    app.run()
+    assert not app.exception
+    assert any("Synthetic Negro Libre" in x.value and "100.25 USD" in x.value for x in app.markdown)
+    assert any(
+        "RAM —" in x.value and "Storage 128 GB" in x.value and "Carrier locked" in x.value
+        for x in app.caption
+    )
+    assert any("Catalog products; source currency unconfirmed" in x.value for x in app.markdown)
+
+    second = card.model_copy(update={"id": uuid4(), "name": "Second synthetic phone"})
+    app.session_state.history.append(
+        (
+            "Compare phones",
+            DialogueResponse(
+                request_id=uuid4(),
+                status="ok",
+                comparison=[card, second],
+                message="Сравнение по текущим данным каталога.",
+            ),
+        )
+    )
+    app.run()
+    assert not app.exception
+    assert "Feature" in app.table[0].value.columns
+    assert app.table[0].value.iloc[4, 1] == "Negro"
+    assert app.table[0].value.iloc[6, 1] == "100.25 USD*"

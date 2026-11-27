@@ -7,16 +7,16 @@ PostgreSQL filters, E5/Qdrant retrieval and selection by an installed Ollama mod
 
 **Current status:** all 1,816 catalog records are loaded into PostgreSQL and Qdrant
 with matching UUIDs. Text and sidebar filters, dialogue refinement and product
-comparison are implemented. Local acceptance passed: 121 tests, the live browser
+comparison are implemented. Local acceptance passed: 123 tests, the live browser
 scenarios and paired retrieval/LLM evaluation. This is a local demo; production
 deployment has not been tested.
 
 ## Interface
 
-![Smartphone assistant: filters, dialogue history and catalog results](assets/streamlit-demo.png)
+![English smartphone assistant: filters and catalog search results](assets/streamlit-demo.en.png)
 
-Dialogue history and catalog results in the local Streamlit interface. Prices are
-historical; the source currency is unconfirmed.
+The English interface with live catalog search results. Product names and prices
+are preserved from the historical catalog; the source currency is unconfirmed.
 
 ## Architecture
 
@@ -144,7 +144,9 @@ project setup), then start the UI:
 uv run --locked streamlit run app.py --server.address 127.0.0.1 --server.port 8501
 ```
 
-Open http://127.0.0.1:8501. Search and refine in chat; apply explicit brand,
+Open http://127.0.0.1:8501, or http://127.0.0.1:8501/?lang=en for English.
+The sidebar Language selector switches between English and Russian without
+clearing the session. Search and refine in chat; apply explicit brand,
 price, RAM, storage and unlocked filters in the sidebar. The buttons can request
 cheaper results or compare the first two results. The UI uses only catalog facts
 read from PostgreSQL. Unknown memory is shown as a dash. USD is the project
@@ -164,7 +166,7 @@ latency, RSS, errors and threshold checks. Queries and report remain untracked.
 Unsupported attributes are handled as clarification by the dialogue; they have
 no relevance labels in retrieval evaluation.
 
-Local verification on November 27, 2026: 121 tests (including isolated integration
+Local verification on November 27, 2026: 123 tests (including isolated integration
 checks), Ruff, formatting, lock verification and an offline build passed. A live UI
 scenario covered text search, refinement, sidebar filters, comparison, empty and
 unsupported requests, and recovery after a Qdrant outage.
